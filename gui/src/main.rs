@@ -14,14 +14,14 @@ use eframe::egui::{
     self, Align, Align2, Color32, CornerRadius, FontId, Layout, Margin, RichText, Sense,
 };
 use model::{
-    fmt_duration, fmt_rate, outcome_color, outcome_label, status_color, Counts, Filter, Outcome,
-    Slot,
+    bit_depth_text, fmt_duration, fmt_rate, outcome_color, outcome_label, row_summary,
+    status_color, Counts, Filter, Outcome, Slot,
 };
 use quality_view::QualityStore;
 use settings::{FfmpegState, Settings};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
-use style::{alpha, card, chip, tile, tinted_card, ACCENT, BG, PANEL, TEXT_DIM};
+use style::{alpha, card, chip_right, tile, tinted_card, ACCENT, BG, PANEL, TEXT_DIM};
 use truelossless_core::{
     csv_line, CheckOptions, DecoderMode, FileReport, Md5Status, Status, CSV_HEADER,
 };
@@ -546,69 +546,52 @@ impl App {
                     }
 
                     let cy = rect.center().y;
-                    let chip_w = chip(
+                    let left = rect.left() + 12.0;
+                    // Verdict chip on the right, vertically centred.
+                    let chip_w = chip_right(
                         painter,
-                        egui::pos2(rect.left() + 10.0, cy),
+                        egui::pos2(rect.right() - 10.0, cy - 8.0),
                         outcome_label(o),
                         outcome_color(o),
                     );
-                    let text_x = rect.left() + 10.0 + chip_w + 12.0;
-
-                    // Right-aligned format summary.
-                    let mut meta_left = rect.right() - 10.0;
-                    if let Some(Ok(r)) = &slot.result {
-                        let meta = [
-                            r.info.sample_rate.map(fmt_rate),
-                            r.info.bits_per_sample.map(|b| format!("{b}-bit")),
-                        ]
-                        .into_iter()
-                        .flatten()
-                        .collect::<Vec<_>>()
-                        .join(" · ");
-                        let g = painter.layout_no_wrap(meta, FontId::proportional(11.5), TEXT_DIM);
-                        meta_left = rect.right() - 10.0 - g.size().x;
-                        painter.galley(egui::pos2(meta_left, cy - g.size().y / 2.0), g, TEXT_DIM);
-                    }
-
+                    let text_right = (rect.right() - 10.0 - chip_w - 10.0).max(left);
                     let clip = egui::Rect::from_min_max(
-                        egui::pos2(text_x, rect.top()),
-                        egui::pos2((meta_left - 10.0).max(text_x), rect.bottom()),
+                        egui::pos2(left, rect.top()),
+                        egui::pos2(text_right, rect.bottom()),
                     );
                     let p = painter.with_clip_rect(clip);
-                    let path = Path::new(&slot.name);
-                    let file = path
+                    // The second line can use the full row width.
+                    let full = egui::Rect::from_min_max(
+                        egui::pos2(left, rect.top()),
+                        egui::pos2(rect.right() - 8.0, rect.bottom()),
+                    );
+                    let p2 = painter.with_clip_rect(full);
+                    let file = Path::new(&slot.name)
                         .file_name()
                         .map(|n| n.to_string_lossy().into_owned())
                         .unwrap_or_else(|| slot.name.clone());
-                    let dir = path
-                        .parent()
-                        .map(|d| d.display().to_string())
-                        .filter(|d| !d.is_empty());
-                    let text_color = ui.visuals().text_color();
-                    if let Some(dir) = dir {
-                        p.text(
-                            egui::pos2(text_x, cy - 8.0),
-                            Align2::LEFT_CENTER,
-                            file,
-                            FontId::proportional(14.0),
-                            text_color,
-                        );
-                        p.text(
-                            egui::pos2(text_x, cy + 9.0),
-                            Align2::LEFT_CENTER,
-                            dir,
-                            FontId::proportional(11.0),
-                            TEXT_DIM,
-                        );
-                    } else {
-                        p.text(
-                            egui::pos2(text_x, cy),
-                            Align2::LEFT_CENTER,
-                            file,
-                            FontId::proportional(14.0),
-                            text_color,
-                        );
-                    }
+                    let summary = match &slot.result {
+                        Some(Ok(r)) => row_summary(&r.info),
+                        Some(Err(_)) => "could not be read".to_string(),
+                        None => String::new(),
+                    };
+                    // Line 1: file name. Line 2: format details.
+                    p.text(
+                        egui::pos2(left, cy - 8.0),
+                        Align2::LEFT_CENTER,
+                        file,
+                        FontId::proportional(14.0),
+                        ui.visuals().text_color(),
+                    );
+                    p2.text(
+                        egui::pos2(left, cy + 9.0),
+                        Align2::LEFT_CENTER,
+                        summary,
+                        FontId::proportional(10.5),
+                        TEXT_DIM,
+                    );
+                    // The folder is no longer drawn in the row; show it on hover.
+                    resp.on_hover_text(slot.name.clone());
                 }
             });
     }
@@ -732,7 +715,7 @@ fn report_view(ui: &mut egui::Ui, slot: &Slot, r: &FileReport, quality: &mut Qua
                         (Some(b), Some(e)) if e != b => format!("{b}-bit ({e} used)"),
                         (Some(b), _) => format!("{b}-bit"),
                         (None, Some(e)) => format!("{e}-bit used"),
-                        (None, None) => "-".into(),
+                        (None, None) => bit_depth_text(i),
                     },
                 );
                 if let Some(a) = &r.analysis {

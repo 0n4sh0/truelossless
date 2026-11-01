@@ -192,7 +192,7 @@ fn stats_card(ui: &mut egui::Ui, q: &Quality, r: &FileReport) {
         );
         ui.add_space(6.0);
         let i = &r.info;
-        let stored = i.bits_per_sample.map_or("-".into(), |b| format!("{b}-bit"));
+        let stored = crate::model::bit_depth_text(i);
         let layout = match q.channels {
             1 => "1 (mono)".to_string(),
             2 => "2 (stereo)".to_string(),
