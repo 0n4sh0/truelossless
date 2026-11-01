@@ -12,3 +12,11 @@ rayon = "1"
 realfft = "3"
 md-5 = "0.10"
 thiserror = "2"
+
+[features]
+# Exposes the synthetic-audio helpers used by tests, for the sample generator.
+testgen = []
+
+[[example]]
+name = "gen_samples"
+required-features = ["testgen"]

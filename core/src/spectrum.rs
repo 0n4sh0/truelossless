@@ -83,8 +83,8 @@ pub fn average_spectrum(windows: &[Vec<f32>], sample_rate: u32) -> Option<Spectr
     })
 }
 
-#[cfg(test)]
-pub(crate) mod testutil {
+#[cfg(any(test, feature = "testgen"))]
+pub mod testutil {
     /// Deterministic white noise in [-1, 1] (xorshift) so tests are repeatable.
     pub fn white_noise(len: usize, seed: u64) -> Vec<f32> {
         let mut s = seed | 1;

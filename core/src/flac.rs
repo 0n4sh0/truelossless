@@ -169,8 +169,8 @@ pub fn verify_md5(path: &Path) -> Result<Md5Report, ProbeError> {
 
 /// Test helper: a minimal FLAC encoder using verbatim subframes. It produces
 /// valid files (correct CRCs and MD5) without needing an external encoder.
-#[cfg(test)]
-pub(crate) mod testflac {
+#[cfg(any(test, feature = "testgen"))]
+pub mod testflac {
     use super::*;
     use std::io::Write;
 
