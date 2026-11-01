@@ -6,6 +6,9 @@ members = ["core", "cli", "gui"]
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
+authors = ["n4sh <https://github.com/0n4sh0>"]
+repository = "https://github.com/0n4sh0/truelossless"
+homepage = "https://github.com/0n4sh0/truelossless"
 
 [profile.release]
 lto = true

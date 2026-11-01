@@ -11,7 +11,12 @@ use truelossless_core::{
 /// Exit code: 0 = no problems, 1 = nothing to scan, 2 = at least one
 /// fake, corrupt or unreadable file was found.
 #[derive(Parser)]
-#[command(version, about)]
+#[command(
+    version,
+    about,
+    author,
+    after_help = "Created by n4sh. Source and issues: https://github.com/0n4sh0/truelossless"
+)]
 struct Args {
     /// Folder (scanned recursively) or a single audio file.
     path: PathBuf,

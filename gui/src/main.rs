@@ -63,6 +63,7 @@ struct App {
     verify_md5: bool,
     notice: Option<(String, Instant)>,
     quality: QualityStore,
+    about_open: bool,
 }
 
 impl App {
@@ -296,13 +297,47 @@ impl App {
                         .color(outcome_color(Outcome::Error)),
                 );
             }
-            if let Some((msg, _)) = &self.notice {
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if ui.small_button("About").clicked() {
+                    self.about_open = true;
+                }
+                ui.label(RichText::new(concat!("v", env!("CARGO_PKG_VERSION"))).color(TEXT_DIM));
+                if let Some((msg, _)) = &self.notice {
                     ui.label(RichText::new(msg).color(TEXT_DIM));
-                });
-                ui.ctx().request_repaint_after(Duration::from_secs(1));
-            }
+                    ui.ctx().request_repaint_after(Duration::from_secs(1));
+                }
+            });
         });
+    }
+
+    fn about_window(&mut self, ctx: &egui::Context) {
+        let mut open = self.about_open;
+        egui::Window::new("About TrueLossless")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.label(RichText::new("TrueLossless").size(22.0).strong());
+                ui.label(
+                    RichText::new(concat!("Version ", env!("CARGO_PKG_VERSION"))).color(TEXT_DIM),
+                );
+                ui.add_space(6.0);
+                ui.label("Checks whether lossless and hi-res audio files are the real thing.");
+                ui.add_space(6.0);
+                ui.label("Created by n4sh");
+                ui.hyperlink_to(
+                    "github.com/0n4sh0/truelossless",
+                    env!("CARGO_PKG_REPOSITORY"),
+                );
+                ui.add_space(6.0);
+                ui.label(
+                    RichText::new("MIT License. Audio decoding by Symphonia, UI by egui.")
+                        .small()
+                        .color(TEXT_DIM),
+                );
+            });
+        self.about_open = open;
     }
 
     fn file_list(&mut self, ui: &mut egui::Ui) {
@@ -693,6 +728,7 @@ impl eframe::App for App {
             )
             .show(ui, |ui| self.details(ui));
 
+        self.about_window(&ctx);
         drop_overlay(&ctx);
     }
 }

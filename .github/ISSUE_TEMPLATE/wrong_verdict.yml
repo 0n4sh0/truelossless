@@ -1,0 +1,38 @@
+name: Wrong verdict
+description: A file was marked fake or genuine, and you know it should not be
+labels: [verdict]
+body:
+  - type: markdown
+    attributes:
+      value: Please do not attach copyrighted music. A screenshot or the CSV row is enough.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+    validations:
+      required: true
+  - type: dropdown
+    id: shown
+    attributes:
+      label: Verdict shown
+      options: [GENUINE, SUSPECT, FAKE, CORRUPT, LOSSY]
+    validations:
+      required: true
+  - type: input
+    id: format
+    attributes:
+      label: Codec, sample rate and bit depth
+      placeholder: FLAC, 96 kHz, 24-bit
+    validations:
+      required: true
+  - type: textarea
+    id: truth
+    attributes:
+      label: How do you know what the file really is?
+      description: For example the source, the encoder, or a comparison with another tool.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Screenshot or CSV row
