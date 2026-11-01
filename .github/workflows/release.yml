@@ -106,13 +106,18 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
       - name: Checksums
         run: cd dist && sha256sum * > SHA256SUMS.txt
+      - name: Render release notes
+        run: sed "s/{{VERSION}}/${GITHUB_REF_NAME}/g" .github/release-notes.md > notes.md
       - uses: softprops/action-gh-release@v2
         with:
+          name: TrueLossless ${{ github.ref_name }}
+          body_path: notes.md
           files: dist/*
           generate_release_notes: true
