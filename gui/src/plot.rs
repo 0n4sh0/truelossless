@@ -54,7 +54,10 @@ pub fn spectrum_plot(ui: &mut egui::Ui, spec: &Spectrum, cut: &Cutoff) {
     let mut db = DB_MIN;
     while db <= DB_MAX {
         let y = y_of(db);
-        painter.line_segment([Pos2::new(plot.left(), y), Pos2::new(plot.right(), y)], grid);
+        painter.line_segment(
+            [Pos2::new(plot.left(), y), Pos2::new(plot.right(), y)],
+            grid,
+        );
         painter.text(
             Pos2::new(plot.left() - 6.0, y),
             Align2::RIGHT_CENTER,
@@ -69,7 +72,10 @@ pub fn spectrum_plot(ui: &mut egui::Ui, spec: &Spectrum, cut: &Cutoff) {
     let mut hz = 0.0;
     while hz <= nyq {
         let x = x_of(hz);
-        painter.line_segment([Pos2::new(x, plot.top()), Pos2::new(x, plot.bottom())], grid);
+        painter.line_segment(
+            [Pos2::new(x, plot.top()), Pos2::new(x, plot.bottom())],
+            grid,
+        );
         painter.text(
             Pos2::new(x, plot.bottom() + 5.0),
             Align2::CENTER_TOP,
@@ -127,12 +133,25 @@ pub fn spectrum_plot(ui: &mut egui::Ui, spec: &Spectrum, cut: &Cutoff) {
     let label = format!("content ends {:.1} kHz", cut.bandwidth_hz / 1000.0);
     let galley = painter.layout_no_wrap(label, font.clone(), AMBER);
     let on_left = bx > plot.center().x;
-    let lx = if on_left { bx - 8.0 - galley.size().x - 12.0 } else { bx + 8.0 };
+    let lx = if on_left {
+        bx - 8.0 - galley.size().x - 12.0
+    } else {
+        bx + 8.0
+    };
     let chip = Rect::from_min_size(
         Pos2::new(lx, plot.top() + 8.0),
         Vec2::new(galley.size().x + 12.0, galley.size().y + 6.0),
     );
     painter.rect_filled(chip, CornerRadius::same(5), alpha(BG, 230));
-    painter.rect_stroke(chip, CornerRadius::same(5), Stroke::new(1.0, alpha(AMBER, 160)), egui::StrokeKind::Inside);
-    painter.galley(Pos2::new(chip.left() + 6.0, chip.top() + 3.0), galley, AMBER);
+    painter.rect_stroke(
+        chip,
+        CornerRadius::same(5),
+        Stroke::new(1.0, alpha(AMBER, 160)),
+        egui::StrokeKind::Inside,
+    );
+    painter.galley(
+        Pos2::new(chip.left() + 6.0, chip.top() + 3.0),
+        galley,
+        AMBER,
+    );
 }

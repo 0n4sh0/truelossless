@@ -59,7 +59,10 @@ pub fn detect_cutoff(s: &Spectrum) -> Option<Cutoff> {
     let threshold = floor_db + PRESENCE_DB;
     // If nothing rises above the floor the upper spectrum is flat: there is no
     // band limit, so report the full range rather than the search start.
-    let top = (from..n).rev().find(|&i| sm[i] > threshold).unwrap_or(n - 1);
+    let top = (from..n)
+        .rev()
+        .find(|&i| sm[i] > threshold)
+        .unwrap_or(n - 1);
 
     // Steepest edge: mean level just below minus mean level just above.
     let mut prefix = vec![0f64; n + 1];

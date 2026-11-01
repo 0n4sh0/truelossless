@@ -7,11 +7,11 @@ use eframe::egui::{
     self, Align2, Color32, ColorImage, CornerRadius, FontId, Pos2, Rect, RichText, Sense, Stroke,
     TextureHandle, TextureOptions, Vec2,
 };
-use truelossless_core::quality::SPEC_DB_MIN;
-use truelossless_core::{analyze_quality, FileReport, Quality};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender};
+use truelossless_core::quality::SPEC_DB_MIN;
+use truelossless_core::{analyze_quality, FileReport, Quality};
 
 const AMBER: Color32 = Color32::from_rgb(245, 180, 50);
 const KEEP: usize = 8;
@@ -39,7 +39,13 @@ pub struct QualityStore {
 impl Default for QualityStore {
     fn default() -> Self {
         let (tx, rx) = channel();
-        QualityStore { map: HashMap::new(), order: Vec::new(), running: None, tx, rx }
+        QualityStore {
+            map: HashMap::new(),
+            order: Vec::new(),
+            running: None,
+            tx,
+            rx,
+        }
     }
 }
 
@@ -105,7 +111,11 @@ pub fn show(ui: &mut egui::Ui, store: &mut QualityStore, path: &Path, r: &FileRe
         QEntry::Failed(e) => {
             card().show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ui.label(RichText::new("AUDIO QUALITY ANALYSIS").small().color(TEXT_DIM));
+                ui.label(
+                    RichText::new("AUDIO QUALITY ANALYSIS")
+                        .small()
+                        .color(TEXT_DIM),
+                );
                 ui.label(RichText::new(format!("Not available: {e}")).color(TEXT_DIM));
             });
         }
@@ -127,7 +137,11 @@ fn db(v: f64) -> String {
 fn stats_card(ui: &mut egui::Ui, q: &Quality, r: &FileReport) {
     card().show(ui, |ui| {
         ui.set_width(ui.available_width());
-        ui.label(RichText::new("AUDIO QUALITY ANALYSIS").small().color(TEXT_DIM));
+        ui.label(
+            RichText::new("AUDIO QUALITY ANALYSIS")
+                .small()
+                .color(TEXT_DIM),
+        );
         ui.add_space(6.0);
         let i = &r.info;
         let stored = i.bits_per_sample.map_or("-".into(), |b| format!("{b}-bit"));
@@ -150,11 +164,24 @@ fn stats_card(ui: &mut egui::Ui, q: &Quality, r: &FileReport) {
             ("Codec", i.codec.clone(), None),
             ("Sample rate", fmt_rate(q.sample_rate), None),
             ("Bit depth", stored, None),
-            ("Bitrate", q.bitrate_bps.map_or("-".into(), |b| format!("{:.2} Mbps", b / 1e6)), None),
+            (
+                "Bitrate",
+                q.bitrate_bps
+                    .map_or("-".into(), |b| format!("{:.2} Mbps", b / 1e6)),
+                None,
+            ),
             ("Channels", layout, None),
             ("Duration", fmt_duration(q.duration_secs), None),
-            ("Nyquist", format!("{:.1} kHz", q.sample_rate as f32 / 2000.0), None),
-            ("Size", format!("{:.1} MB", i.size_bytes as f64 / 1_048_576.0), None),
+            (
+                "Nyquist",
+                format!("{:.1} kHz", q.sample_rate as f32 / 2000.0),
+                None,
+            ),
+            (
+                "Size",
+                format!("{:.1} MB", i.size_bytes as f64 / 1_048_576.0),
+                None,
+            ),
         ];
         grid(ui, "q_basic", &rows);
         rows.clear();
@@ -166,11 +193,30 @@ fn stats_card(ui: &mut egui::Ui, q: &Quality, r: &FileReport) {
             ("Dynamic range", db(q.dynamic_range_db), None),
             ("Peak", db(q.peak_db), None),
             ("RMS", db(q.rms_db), None),
-            ("Loudness", q.lufs.map_or("-".into(), |l| format!("{l:.1} LUFS")), None),
-            ("True peak", if q.true_peak_dbtp <= -119.9 { "-inf dBTP".into() } else { format!("{:.2} dBTP", q.true_peak_dbtp) }, (q.true_peak_dbtp > 0.0).then_some(AMBER)),
+            (
+                "Loudness",
+                q.lufs.map_or("-".into(), |l| format!("{l:.1} LUFS")),
+                None,
+            ),
+            (
+                "True peak",
+                if q.true_peak_dbtp <= -119.9 {
+                    "-inf dBTP".into()
+                } else {
+                    format!("{:.2} dBTP", q.true_peak_dbtp)
+                },
+                (q.true_peak_dbtp > 0.0).then_some(AMBER),
+            ),
             ("Clipping", q.clipped.to_string(), clip),
             ("Spectral cutoff", cutoff, None),
-            ("Samples", format!("{:.1}M", q.duration_secs * q.sample_rate as f64 * q.channels as f64 / 1e6), None),
+            (
+                "Samples",
+                format!(
+                    "{:.1}M",
+                    q.duration_secs * q.sample_rate as f64 * q.channels as f64 / 1e6
+                ),
+                None,
+            ),
         ]);
         grid(ui, "q_levels", &rows);
 
@@ -198,19 +244,23 @@ fn stats_card(ui: &mut egui::Ui, q: &Quality, r: &FileReport) {
 }
 
 fn grid(ui: &mut egui::Ui, id: &str, rows: &[(&str, String, Option<Color32>)]) {
-    egui::Grid::new(id).num_columns(4).spacing([18.0, 7.0]).min_col_width(70.0).show(ui, |ui| {
-        for (n, (k, v, color)) in rows.iter().enumerate() {
-            ui.label(RichText::new(*k).color(TEXT_DIM));
-            let mut text = RichText::new(v).strong();
-            if let Some(c) = color {
-                text = text.color(*c);
+    egui::Grid::new(id)
+        .num_columns(4)
+        .spacing([18.0, 7.0])
+        .min_col_width(70.0)
+        .show(ui, |ui| {
+            for (n, (k, v, color)) in rows.iter().enumerate() {
+                ui.label(RichText::new(*k).color(TEXT_DIM));
+                let mut text = RichText::new(v).strong();
+                if let Some(c) = color {
+                    text = text.color(*c);
+                }
+                ui.label(text);
+                if n % 2 == 1 {
+                    ui.end_row();
+                }
             }
-            ui.label(text);
-            if n % 2 == 1 {
-                ui.end_row();
-            }
-        }
-    });
+        });
 }
 
 /// Black → blue → purple → red → yellow → white.
@@ -256,7 +306,11 @@ fn build_texture(ctx: &egui::Context, q: &Quality, layer: usize) -> TextureHandl
 }
 
 fn nice_step(range: f32, max_ticks: f32, steps: &[f32]) -> f32 {
-    steps.iter().copied().find(|s| range / s <= max_ticks).unwrap_or(*steps.last().unwrap())
+    steps
+        .iter()
+        .copied()
+        .find(|s| range / s <= max_ticks)
+        .unwrap_or(*steps.last().unwrap())
 }
 
 fn spectrogram_card(ui: &mut egui::Ui, v: &mut QView) {
@@ -268,7 +322,11 @@ fn spectrogram_card(ui: &mut egui::Ui, v: &mut QView) {
             let n = v.q.spectrogram.layers.len();
             for l in 0..n {
                 let name = if l == 0 {
-                    if n == 1 { "Mono".to_string() } else { "Mix".to_string() }
+                    if n == 1 {
+                        "Mono".to_string()
+                    } else {
+                        "Mix".to_string()
+                    }
                 } else {
                     format!("Ch {l}")
                 };
@@ -309,27 +367,49 @@ fn spectrogram_card(ui: &mut egui::Ui, v: &mut QView) {
         while f <= nyq + 1.0 {
             let y = area.bottom() - f / nyq * area.height();
             if f > 0.0 {
-                painter.line_segment([Pos2::new(area.left(), y), Pos2::new(area.right(), y)], grid);
+                painter.line_segment(
+                    [Pos2::new(area.left(), y), Pos2::new(area.right(), y)],
+                    grid,
+                );
             }
             painter.text(
                 Pos2::new(area.left() - 6.0, y),
                 Align2::RIGHT_CENTER,
-                if f == 0.0 { "0".to_string() } else { format!("{:.0}k", f / 1000.0) },
+                if f == 0.0 {
+                    "0".to_string()
+                } else {
+                    format!("{:.0}k", f / 1000.0)
+                },
                 font.clone(),
                 TEXT_DIM,
             );
             f += fstep;
         }
         let dur = s.duration_secs as f32;
-        let tstep = nice_step(dur, 8.0, &[1.0, 2.0, 5.0, 10.0, 15.0, 30.0, 60.0, 120.0, 300.0, 600.0, 1800.0]);
+        let tstep = nice_step(
+            dur,
+            8.0,
+            &[
+                1.0, 2.0, 5.0, 10.0, 15.0, 30.0, 60.0, 120.0, 300.0, 600.0, 1800.0,
+            ],
+        );
         let mut t = 0.0;
         while t <= dur {
             let x = area.left() + t / dur * area.width();
             if t > 0.0 {
-                painter.line_segment([Pos2::new(x, area.top()), Pos2::new(x, area.bottom())], grid);
+                painter.line_segment(
+                    [Pos2::new(x, area.top()), Pos2::new(x, area.bottom())],
+                    grid,
+                );
             }
             let label = format!("{}:{:02}", t as u32 / 60, t as u32 % 60);
-            painter.text(Pos2::new(x, area.bottom() + 4.0), Align2::CENTER_TOP, label, font.clone(), TEXT_DIM);
+            painter.text(
+                Pos2::new(x, area.bottom() + 4.0),
+                Align2::CENTER_TOP,
+                label,
+                font.clone(),
+                TEXT_DIM,
+            );
             t += tstep;
         }
 
@@ -348,7 +428,12 @@ fn spectrogram_card(ui: &mut egui::Ui, v: &mut QView) {
                 heat(k as f32 / (slices - 1) as f32),
             );
         }
-        painter.rect_stroke(bar, CornerRadius::same(2), Stroke::new(1.0, BORDER), egui::StrokeKind::Outside);
+        painter.rect_stroke(
+            bar,
+            CornerRadius::same(2),
+            Stroke::new(1.0, BORDER),
+            egui::StrokeKind::Outside,
+        );
         painter.text(
             Pos2::new(bar.left() - 6.0, bar.center().y),
             Align2::RIGHT_CENTER,
@@ -356,6 +441,12 @@ fn spectrogram_card(ui: &mut egui::Ui, v: &mut QView) {
             font.clone(),
             TEXT_DIM,
         );
-        painter.text(Pos2::new(bar.right() + 6.0, bar.center().y), Align2::LEFT_CENTER, "0 dBFS", font, TEXT_DIM);
+        painter.text(
+            Pos2::new(bar.right() + 6.0, bar.center().y),
+            Align2::LEFT_CENTER,
+            "0 dBFS",
+            font,
+            TEXT_DIM,
+        );
     });
 }

@@ -127,8 +127,15 @@ fn integrated_lufs(steps: &[f64]) -> Option<f64> {
         return None;
     }
     let lufs = |e: f64| -0.691 + 10.0 * e.log10();
-    let blocks: Vec<f64> = steps.windows(4).map(|w| w.iter().sum::<f64>() / 4.0).collect();
-    let loud: Vec<f64> = blocks.iter().copied().filter(|&e| e > 0.0 && lufs(e) > -70.0).collect();
+    let blocks: Vec<f64> = steps
+        .windows(4)
+        .map(|w| w.iter().sum::<f64>() / 4.0)
+        .collect();
+    let loud: Vec<f64> = blocks
+        .iter()
+        .copied()
+        .filter(|&e| e > 0.0 && lufs(e) > -70.0)
+        .collect();
     if loud.is_empty() {
         return None;
     }
@@ -150,8 +157,16 @@ fn true_peak_kernels() -> [[f32; TP_TAPS]; 3] {
         let pos = 5.0 + (phase + 1) as f64 / 4.0;
         for (k, w) in row.iter_mut().enumerate() {
             let x = pos - k as f64;
-            let sinc = if x.abs() < 1e-9 { 1.0 } else { (PI * x).sin() / (PI * x) };
-            let win = if x.abs() < 6.0 { 0.5 * (1.0 + (PI * x / 6.0).cos()) } else { 0.0 };
+            let sinc = if x.abs() < 1e-9 {
+                1.0
+            } else {
+                (PI * x).sin() / (PI * x)
+            };
+            let win = if x.abs() < 6.0 {
+                0.5 * (1.0 + (PI * x / 6.0).cos())
+            } else {
+                0.0
+            };
             *w = (sinc * win) as f32;
         }
     }
@@ -210,7 +225,8 @@ impl SpecBuilder {
         let norm = SPEC_WIN as f32 / 4.0;
         for (pend, layer) in self.pending.iter_mut().zip(self.layers.iter_mut()) {
             if pend.len() == SPEC_WIN {
-                let mut input: Vec<f32> = pend.iter().zip(&self.window).map(|(s, w)| s * w).collect();
+                let mut input: Vec<f32> =
+                    pend.iter().zip(&self.window).map(|(s, w)| s * w).collect();
                 let mut out = self.fft.make_output_vec();
                 if self.fft.process(&mut input, &mut out).is_ok() {
                     for c in out.iter().take(SPEC_ROWS) {
@@ -219,10 +235,10 @@ impl SpecBuilder {
                         layer.push(v as u8);
                     }
                 } else {
-                    layer.extend(std::iter::repeat(0).take(SPEC_ROWS));
+                    layer.extend(std::iter::repeat_n(0, SPEC_ROWS));
                 }
             } else {
-                layer.extend(std::iter::repeat(0).take(SPEC_ROWS));
+                layer.extend(std::iter::repeat_n(0, SPEC_ROWS));
             }
             pend.clear();
         }
@@ -249,7 +265,11 @@ fn analyze_quality_inner(path: &Path) -> Result<Quality, ProbeError> {
     let sample_rate = params
         .sample_rate
         .ok_or_else(|| ProbeError::Decode("unknown sample rate".into()))?;
-    let declared_bits = params.bits_per_sample.or(params.bits_per_coded_sample).unwrap_or(16).clamp(8, 24);
+    let declared_bits = params
+        .bits_per_sample
+        .or(params.bits_per_coded_sample)
+        .unwrap_or(16)
+        .clamp(8, 24);
     let clip_level = (1.0 - 2f64.powi(1 - declared_bits as i32)) as f32;
     let hop = params
         .n_frames
@@ -268,11 +288,8 @@ fn analyze_quality_inner(path: &Path) -> Result<Quality, ProbeError> {
     let mut steps: Vec<f64> = Vec::new();
     let mut values: Vec<f32> = Vec::new();
 
-    loop {
-        let packet = match format.next_packet() {
-            Ok(p) => p,
-            Err(_) => break,
-        };
+    // Stops at the end of the stream (or on an unrecoverable read error).
+    while let Ok(packet) = format.next_packet() {
         if packet.track_id() != track_id {
             continue;
         }
@@ -301,7 +318,10 @@ fn analyze_quality_inner(path: &Path) -> Result<Quality, ProbeError> {
         if ch != chans.len() {
             continue; // channel layout changed mid-stream: ignore the odd packet
         }
-        if sbuf.as_ref().map_or(true, |s| s.capacity() < buf.capacity() * ch) {
+        if sbuf
+            .as_ref()
+            .is_none_or(|s| s.capacity() < buf.capacity() * ch)
+        {
             sbuf = Some(SampleBuffer::new(buf.capacity() as u64, sp));
         }
         let sb = sbuf.as_mut().unwrap();
@@ -340,7 +360,7 @@ fn analyze_quality_inner(path: &Path) -> Result<Quality, ProbeError> {
             }
             step_energy += loud;
             frame += 1;
-            if frame % step_len == 0 {
+            if frame.is_multiple_of(step_len) {
                 steps.push(step_energy / step_len as f64);
                 step_energy = 0.0;
             }
@@ -421,15 +441,27 @@ mod tests {
         let q = run("fc_q_sine.wav", 44_100, &sine(44_100, 3.0, 997.0, 0.5));
         assert!((q.peak_db + 6.02).abs() < 0.1, "{}", q.peak_db);
         assert!((q.rms_db + 9.03).abs() < 0.1, "{}", q.rms_db);
-        assert!((q.dynamic_range_db - 3.01).abs() < 0.15, "{}", q.dynamic_range_db);
+        assert!(
+            (q.dynamic_range_db - 3.01).abs() < 0.15,
+            "{}",
+            q.dynamic_range_db
+        );
         assert_eq!(q.clipped, 0);
         assert_eq!(q.channels, 1);
     }
 
     #[test]
     fn louder_signal_reads_louder_in_lufs() {
-        let a = run("fc_q_a.wav", 44_100, &sine(44_100, 3.0, 997.0, 0.1)).lufs.unwrap();
-        let b = run("fc_q_b.wav", 44_100, &sine(44_100, 3.0, 997.0, 0.316_227_77)).lufs.unwrap();
+        let a = run("fc_q_a.wav", 44_100, &sine(44_100, 3.0, 997.0, 0.1))
+            .lufs
+            .unwrap();
+        let b = run(
+            "fc_q_b.wav",
+            44_100,
+            &sine(44_100, 3.0, 997.0, 0.316_227_77),
+        )
+        .lufs
+        .unwrap();
         assert!((b - a - 10.0).abs() < 0.2, "{a} {b}");
         // Mono sine at -20 dBFS peak: mean square 0.005 => about -23.7 LUFS.
         assert!((a + 23.7).abs() < 1.5, "{a}");
@@ -437,7 +469,10 @@ mod tests {
 
     #[test]
     fn clipping_is_counted() {
-        let sig: Vec<f32> = sine(44_100, 2.0, 200.0, 2.0).iter().map(|s| s.clamp(-1.0, 1.0)).collect();
+        let sig: Vec<f32> = sine(44_100, 2.0, 200.0, 2.0)
+            .iter()
+            .map(|s| s.clamp(-1.0, 1.0))
+            .collect();
         let q = run("fc_q_clip.wav", 44_100, &sig);
         assert!(q.clipped > 100, "{}", q.clipped);
         assert!(q.peak_db > -0.1);
@@ -445,7 +480,11 @@ mod tests {
 
     #[test]
     fn true_peak_is_at_least_sample_peak() {
-        let q = run("fc_q_tp.wav", 44_100, &sine(44_100, 2.0, 11_025.0 + 300.0, 0.9));
+        let q = run(
+            "fc_q_tp.wav",
+            44_100,
+            &sine(44_100, 2.0, 11_025.0 + 300.0, 0.9),
+        );
         assert!(q.true_peak_dbtp >= q.peak_db - 0.01);
     }
 

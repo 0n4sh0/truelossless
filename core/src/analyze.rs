@@ -56,7 +56,11 @@ mod tests {
         write_wav(&p, 44_100, &sig);
         let a = analyze_file(&p).unwrap();
         std::fs::remove_file(&p).ok();
-        assert!((a.cutoff.bandwidth_hz - 16_000.0).abs() < 1_000.0, "{:?}", a.cutoff);
+        assert!(
+            (a.cutoff.bandwidth_hz - 16_000.0).abs() < 1_000.0,
+            "{:?}",
+            a.cutoff
+        );
         assert!(a.cutoff.cliff_db > 25.0, "{:?}", a.cutoff);
     }
 

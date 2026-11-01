@@ -181,10 +181,7 @@ fn integer_bits(buf: &AudioBufferRef, declared: Option<u32>) -> u32 {
     match buf {
         AudioBufferRef::S16(_) => 16,
         AudioBufferRef::S24(_) => 24,
-        AudioBufferRef::S32(_) => match declared {
-            Some(b @ (16 | 24)) => b,
-            _ => 0,
-        },
+        AudioBufferRef::S32(_) => declared.unwrap_or_default(),
         _ => 0,
     }
 }
@@ -225,7 +222,7 @@ fn collect(
                 };
 
                 let needed = buf.capacity() * ch;
-                if sbuf.as_ref().map_or(true, |s| s.capacity() < needed) {
+                if sbuf.as_ref().is_none_or(|s| s.capacity() < needed) {
                     sbuf = Some(SampleBuffer::new(buf.capacity() as u64, spec));
                 }
                 let sb = sbuf.as_mut().unwrap();

@@ -1,8 +1,8 @@
 //! Theme, fonts and small reusable widgets.
 
 use eframe::egui::{
-    self, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Frame,
-    Margin, RichText, Stroke, TextStyle, Theme, ThemePreference, Ui,
+    self, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Frame, Margin,
+    RichText, Stroke, TextStyle, Theme, ThemePreference, Ui,
 };
 use std::sync::Arc;
 
@@ -22,10 +22,14 @@ pub fn apply(ctx: &egui::Context) {
         s.spacing.button_padding = egui::vec2(14.0, 7.0);
         s.spacing.interact_size.y = 30.0;
         s.spacing.scroll.bar_width = 8.0;
-        s.text_styles.insert(TextStyle::Heading, FontId::proportional(20.0));
-        s.text_styles.insert(TextStyle::Body, FontId::proportional(14.5));
-        s.text_styles.insert(TextStyle::Button, FontId::proportional(14.0));
-        s.text_styles.insert(TextStyle::Small, FontId::proportional(11.5));
+        s.text_styles
+            .insert(TextStyle::Heading, FontId::proportional(20.0));
+        s.text_styles
+            .insert(TextStyle::Body, FontId::proportional(14.5));
+        s.text_styles
+            .insert(TextStyle::Button, FontId::proportional(14.0));
+        s.text_styles
+            .insert(TextStyle::Small, FontId::proportional(11.5));
     });
 }
 
@@ -132,4 +136,3 @@ pub fn chip(painter: &egui::Painter, left_center: egui::Pos2, text: &str, color:
     );
     w
 }
-

@@ -1,4 +1,7 @@
-#![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
+#![cfg_attr(
+    all(not(debug_assertions), target_os = "windows"),
+    windows_subsystem = "windows"
+)]
 
 mod model;
 mod plot;
@@ -6,24 +9,27 @@ mod quality_view;
 mod style;
 mod worker;
 
-use eframe::egui::{self, Align, Align2, Color32, CornerRadius, FontId, Layout, Margin, RichText, Sense};
-use truelossless_core::{csv_line, CheckOptions, FileReport, Md5Status, Status, CSV_HEADER};
-use model::{
-    fmt_duration, fmt_rate, outcome_color, outcome_label, status_color, Counts, Filter, Outcome, Slot,
+use eframe::egui::{
+    self, Align, Align2, Color32, CornerRadius, FontId, Layout, Margin, RichText, Sense,
 };
+use model::{
+    fmt_duration, fmt_rate, outcome_color, outcome_label, status_color, Counts, Filter, Outcome,
+    Slot,
+};
+use quality_view::QualityStore;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use style::{alpha, card, chip, tile, tinted_card, ACCENT, BG, PANEL, TEXT_DIM};
-use quality_view::QualityStore;
+use truelossless_core::{csv_line, CheckOptions, FileReport, Md5Status, Status, CSV_HEADER};
 use worker::{start_scan, Msg, ScanHandle};
 
 fn main() -> eframe::Result {
     // Optional first argument: a folder or file to scan on start-up.
     let initial = std::env::args_os().nth(1).map(PathBuf::from);
     let mut viewport = egui::ViewportBuilder::default()
-            .with_inner_size([1180.0, 720.0])
-            .with_min_inner_size([820.0, 480.0])
-            .with_drag_and_drop(true);
+        .with_inner_size([1180.0, 720.0])
+        .with_min_inner_size([820.0, 480.0])
+        .with_drag_and_drop(true);
     if let Ok(icon) = eframe::icon_data::from_png_bytes(include_bytes!("../../assets/icon.png")) {
         viewport = viewport.with_icon(icon);
     }
@@ -205,7 +211,8 @@ impl App {
             ui.label(RichText::new("TrueLossless").size(18.0).strong());
             ui.add_space(10.0);
 
-            let open = egui::Button::new(RichText::new("Open folder").color(BG).strong()).fill(ACCENT);
+            let open =
+                egui::Button::new(RichText::new("Open folder").color(BG).strong()).fill(ACCENT);
             if ui.add(open).clicked() {
                 if let Some(dir) = rfd::FileDialog::new().pick_folder() {
                     self.start(dir, &ctx);
@@ -349,7 +356,12 @@ impl App {
                     }
 
                     let cy = rect.center().y;
-                    let chip_w = chip(painter, egui::pos2(rect.left() + 10.0, cy), outcome_label(o), outcome_color(o));
+                    let chip_w = chip(
+                        painter,
+                        egui::pos2(rect.left() + 10.0, cy),
+                        outcome_label(o),
+                        outcome_color(o),
+                    );
                     let text_x = rect.left() + 10.0 + chip_w + 12.0;
 
                     // Right-aligned format summary.
@@ -384,10 +396,28 @@ impl App {
                         .filter(|d| !d.is_empty());
                     let text_color = ui.visuals().text_color();
                     if let Some(dir) = dir {
-                        p.text(egui::pos2(text_x, cy - 8.0), Align2::LEFT_CENTER, file, FontId::proportional(14.0), text_color);
-                        p.text(egui::pos2(text_x, cy + 9.0), Align2::LEFT_CENTER, dir, FontId::proportional(11.0), TEXT_DIM);
+                        p.text(
+                            egui::pos2(text_x, cy - 8.0),
+                            Align2::LEFT_CENTER,
+                            file,
+                            FontId::proportional(14.0),
+                            text_color,
+                        );
+                        p.text(
+                            egui::pos2(text_x, cy + 9.0),
+                            Align2::LEFT_CENTER,
+                            dir,
+                            FontId::proportional(11.0),
+                            TEXT_DIM,
+                        );
                     } else {
-                        p.text(egui::pos2(text_x, cy), Align2::LEFT_CENTER, file, FontId::proportional(14.0), text_color);
+                        p.text(
+                            egui::pos2(text_x, cy),
+                            Align2::LEFT_CENTER,
+                            file,
+                            FontId::proportional(14.0),
+                            text_color,
+                        );
                     }
                 }
             });
@@ -400,7 +430,11 @@ impl App {
             card().show(ui, |ui| {
                 ui.set_width(420.0);
                 ui.add_space(8.0);
-                ui.label(RichText::new("Are your files really lossless?").size(22.0).strong());
+                ui.label(
+                    RichText::new("Are your files really lossless?")
+                        .size(22.0)
+                        .strong(),
+                );
                 ui.add_space(4.0);
                 ui.label(
                     RichText::new(
@@ -410,9 +444,10 @@ impl App {
                     .color(TEXT_DIM),
                 );
                 ui.add_space(14.0);
-                let open = egui::Button::new(RichText::new("Open folder").color(BG).strong().size(15.0))
-                    .fill(ACCENT)
-                    .min_size(egui::vec2(160.0, 38.0));
+                let open =
+                    egui::Button::new(RichText::new("Open folder").color(BG).strong().size(15.0))
+                        .fill(ACCENT)
+                        .min_size(egui::vec2(160.0, 38.0));
                 if ui.add(open).clicked() {
                     if let Some(dir) = rfd::FileDialog::new().pick_folder() {
                         self.start(dir, &ctx);
@@ -444,7 +479,11 @@ impl App {
                 ui.add_space(8.0);
                 ui.heading(&slot.name);
                 tinted_card(outcome_color(Outcome::Error)).show(ui, |ui| {
-                    ui.label(RichText::new("Could not read this file").size(18.0).strong());
+                    ui.label(
+                        RichText::new("Could not read this file")
+                            .size(18.0)
+                            .strong(),
+                    );
                     ui.label(e);
                 });
             }
@@ -455,94 +494,135 @@ impl App {
 
 fn report_view(ui: &mut egui::Ui, slot: &Slot, r: &FileReport, quality: &mut QualityStore) {
     let color = status_color(r.verdict.status);
-    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-        ui.add_space(4.0);
-        let file = Path::new(&slot.name)
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| slot.name.clone());
-        ui.label(RichText::new(file).size(20.0).strong());
-        ui.label(RichText::new(slot.path.display().to_string()).small().color(TEXT_DIM));
-        ui.add_space(4.0);
-
-        tinted_card(color).show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.label(RichText::new(r.verdict.status.label()).size(28.0).strong().color(color));
-            ui.add_space(2.0);
-            for reason in &r.verdict.reasons {
-                ui.label(RichText::new(format!("•  {reason}")).size(14.5));
-            }
-            if let Some(e) = &r.analysis_error {
-                ui.label(RichText::new(format!("•  analysis failed: {e}")).color(TEXT_DIM));
-            }
-        });
-
-        let i = &r.info;
-        ui.horizontal_wrapped(|ui| {
-            tile(ui, "SAMPLE RATE", &i.sample_rate.map_or("-".into(), fmt_rate));
-            let used = r.analysis.as_ref().and_then(|a| a.effective_bits);
-            tile(
-                ui,
-                "BIT DEPTH",
-                &match (i.bits_per_sample, used) {
-                    (Some(b), Some(e)) if e != b => format!("{b}-bit ({e} used)"),
-                    (Some(b), _) => format!("{b}-bit"),
-                    (None, Some(e)) => format!("{e}-bit used"),
-                    (None, None) => "-".into(),
-                },
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            ui.add_space(4.0);
+            let file = Path::new(&slot.name)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| slot.name.clone());
+            ui.label(RichText::new(file).size(20.0).strong());
+            ui.label(
+                RichText::new(slot.path.display().to_string())
+                    .small()
+                    .color(TEXT_DIM),
             );
-            if let Some(a) = &r.analysis {
-                tile(ui, "CONTENT ENDS", &format!("{:.1} kHz", a.cutoff.bandwidth_hz / 1000.0));
-            }
-            tile(ui, "DURATION", &i.duration_secs.map_or("-".into(), fmt_duration));
-            tile(ui, "SIZE", &format!("{:.1} MB", i.size_bytes as f64 / 1_048_576.0));
-        });
+            ui.add_space(4.0);
 
-        if let Some(a) = &r.analysis {
+            tinted_card(color).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.label(
+                    RichText::new(r.verdict.status.label())
+                        .size(28.0)
+                        .strong()
+                        .color(color),
+                );
+                ui.add_space(2.0);
+                for reason in &r.verdict.reasons {
+                    ui.label(RichText::new(format!("•  {reason}")).size(14.5));
+                }
+                if let Some(e) = &r.analysis_error {
+                    ui.label(RichText::new(format!("•  analysis failed: {e}")).color(TEXT_DIM));
+                }
+            });
+
+            let i = &r.info;
+            ui.horizontal_wrapped(|ui| {
+                tile(
+                    ui,
+                    "SAMPLE RATE",
+                    &i.sample_rate.map_or("-".into(), fmt_rate),
+                );
+                let used = r.analysis.as_ref().and_then(|a| a.effective_bits);
+                tile(
+                    ui,
+                    "BIT DEPTH",
+                    &match (i.bits_per_sample, used) {
+                        (Some(b), Some(e)) if e != b => format!("{b}-bit ({e} used)"),
+                        (Some(b), _) => format!("{b}-bit"),
+                        (None, Some(e)) => format!("{e}-bit used"),
+                        (None, None) => "-".into(),
+                    },
+                );
+                if let Some(a) = &r.analysis {
+                    tile(
+                        ui,
+                        "CONTENT ENDS",
+                        &format!("{:.1} kHz", a.cutoff.bandwidth_hz / 1000.0),
+                    );
+                }
+                tile(
+                    ui,
+                    "DURATION",
+                    &i.duration_secs.map_or("-".into(), fmt_duration),
+                );
+                tile(
+                    ui,
+                    "SIZE",
+                    &format!("{:.1} MB", i.size_bytes as f64 / 1_048_576.0),
+                );
+            });
+
+            if let Some(a) = &r.analysis {
+                card().show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.label(RichText::new("AVERAGE SPECTRUM").small().color(TEXT_DIM));
+                    ui.add_space(4.0);
+                    plot::spectrum_plot(ui, &a.spectrum, &a.cutoff);
+                });
+            }
+
+            quality_view::show(ui, quality, &slot.path, r);
+
             card().show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ui.label(RichText::new("AVERAGE SPECTRUM").small().color(TEXT_DIM));
-                ui.add_space(4.0);
-                plot::spectrum_plot(ui, &a.spectrum, &a.cutoff);
+                egui::Grid::new("details")
+                    .num_columns(2)
+                    .spacing([24.0, 6.0])
+                    .show(ui, |ui| {
+                        let mut row = |k: &str, v: String| {
+                            ui.label(RichText::new(k).color(TEXT_DIM));
+                            ui.label(v);
+                            ui.end_row();
+                        };
+                        row(
+                            "Container",
+                            format!("{} (extension .{})", i.container.name(), i.extension),
+                        );
+                        row(
+                            "Codec",
+                            format!(
+                                "{} ({})",
+                                i.codec,
+                                if i.lossless { "lossless" } else { "lossy" }
+                            ),
+                        );
+                        row("Channels", i.channels.map_or("-".into(), |v| v.to_string()));
+                        if let Some(a) = &r.analysis {
+                            row(
+                                "Steepest edge",
+                                format!(
+                                    "{:.0} dB at {:.1} kHz",
+                                    a.cutoff.cliff_db,
+                                    a.cutoff.cliff_hz / 1000.0
+                                ),
+                            );
+                        }
+                        if let Some(m) = &r.md5 {
+                            row(
+                                "FLAC MD5",
+                                match m.status {
+                                    Md5Status::Match => "verified".into(),
+                                    Md5Status::Mismatch => "MISMATCH".into(),
+                                    Md5Status::Unavailable => "not stored in file".into(),
+                                },
+                            );
+                        }
+                    });
             });
-        }
-
-        quality_view::show(ui, quality, &slot.path, r);
-
-        card().show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            egui::Grid::new("details").num_columns(2).spacing([24.0, 6.0]).show(ui, |ui| {
-                let mut row = |k: &str, v: String| {
-                    ui.label(RichText::new(k).color(TEXT_DIM));
-                    ui.label(v);
-                    ui.end_row();
-                };
-                row("Container", format!("{} (extension .{})", i.container.name(), i.extension));
-                row(
-                    "Codec",
-                    format!("{} ({})", i.codec, if i.lossless { "lossless" } else { "lossy" }),
-                );
-                row("Channels", i.channels.map_or("-".into(), |v| v.to_string()));
-                if let Some(a) = &r.analysis {
-                    row(
-                        "Steepest edge",
-                        format!("{:.0} dB at {:.1} kHz", a.cutoff.cliff_db, a.cutoff.cliff_hz / 1000.0),
-                    );
-                }
-                if let Some(m) = &r.md5 {
-                    row(
-                        "FLAC MD5",
-                        match m.status {
-                            Md5Status::Match => "verified".into(),
-                            Md5Status::Mismatch => "MISMATCH".into(),
-                            Md5Status::Unavailable => "not stored in file".into(),
-                        },
-                    );
-                }
-            });
+            ui.add_space(8.0);
         });
-        ui.add_space(8.0);
-    });
 }
 
 fn drop_overlay(ctx: &egui::Context) {
@@ -582,20 +662,35 @@ impl eframe::App for App {
         self.handle_keys(&ctx);
 
         let bar = |top: i8, bottom: i8| {
-            egui::Frame::new()
-                .fill(PANEL)
-                .inner_margin(Margin { left: 16, right: 16, top, bottom })
+            egui::Frame::new().fill(PANEL).inner_margin(Margin {
+                left: 16,
+                right: 16,
+                top,
+                bottom,
+            })
         };
-        egui::Panel::top("top").frame(bar(12, 12)).show(ui, |ui| self.top_bar(ui));
-        egui::Panel::bottom("status").frame(bar(6, 6)).show(ui, |ui| self.status_bar(ui));
+        egui::Panel::top("top")
+            .frame(bar(12, 12))
+            .show(ui, |ui| self.top_bar(ui));
+        egui::Panel::bottom("status")
+            .frame(bar(6, 6))
+            .show(ui, |ui| self.status_bar(ui));
         egui::Panel::left("files")
-            .frame(egui::Frame::new().fill(PANEL).inner_margin(Margin::symmetric(8, 8)))
+            .frame(
+                egui::Frame::new()
+                    .fill(PANEL)
+                    .inner_margin(Margin::symmetric(8, 8)),
+            )
             .resizable(true)
             .default_size(440.0)
             .size_range(300.0..=720.0)
             .show(ui, |ui| self.file_list(ui));
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(BG).inner_margin(Margin::symmetric(20, 12)))
+            .frame(
+                egui::Frame::new()
+                    .fill(BG)
+                    .inner_margin(Margin::symmetric(20, 12)),
+            )
             .show(ui, |ui| self.details(ui));
 
         drop_overlay(&ctx);

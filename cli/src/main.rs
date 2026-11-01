@@ -1,9 +1,10 @@
 use clap::Parser;
-use truelossless_core::{
-    analyze_quality, check_many, csv_line, find_audio_files, CheckOptions, FileReport, Status, CSV_HEADER,
-};
 use std::path::PathBuf;
 use std::process::ExitCode;
+use truelossless_core::{
+    analyze_quality, check_many, csv_line, find_audio_files, CheckOptions, FileReport, Status,
+    CSV_HEADER,
+};
 
 /// Check whether audio files are really lossless / hi-res.
 ///
@@ -135,11 +136,15 @@ fn print_report(name: &str, r: &FileReport) {
         i.codec,
         i.sample_rate.map_or("-".into(), |r| format!("{r} Hz")),
         i.bits_per_sample.map_or("-".into(), |b| b.to_string()),
-        i.duration_secs
-            .map_or("-".into(), |d| format!("{}:{:02}", d as u64 / 60, d as u64 % 60)),
-        r.analysis
-            .as_ref()
-            .map_or("-".into(), |a| format!("{:.1}k", a.cutoff.bandwidth_hz / 1000.0)),
+        i.duration_secs.map_or("-".into(), |d| format!(
+            "{}:{:02}",
+            d as u64 / 60,
+            d as u64 % 60
+        )),
+        r.analysis.as_ref().map_or("-".into(), |a| format!(
+            "{:.1}k",
+            a.cutoff.bandwidth_hz / 1000.0
+        )),
     );
 }
 

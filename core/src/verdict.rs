@@ -117,7 +117,10 @@ pub fn evaluate(info: &FileInfo, ev: &Evidence) -> Verdict {
 
     // 1. Is the content what the extension and codec claim?
     if info.extension_mismatch {
-        let claims_lossless = matches!(info.extension.as_str(), "flac" | "alac" | "wav" | "aif" | "aiff");
+        let claims_lossless = matches!(
+            info.extension.as_str(),
+            "flac" | "alac" | "wav" | "aif" | "aiff"
+        );
         if !info.lossless && claims_lossless {
             c.flag(
                 Status::Fake,
@@ -158,7 +161,9 @@ pub fn evaluate(info: &FileInfo, ev: &Evidence) -> Verdict {
                     "audio does not match the stored MD5".into()
                 },
             ),
-            Md5Status::Unavailable => c.findings.push("no MD5 stored, integrity not verified".into()),
+            Md5Status::Unavailable => c
+                .findings
+                .push("no MD5 stored, integrity not verified".into()),
         }
     }
 
@@ -180,7 +185,8 @@ fn check_bandwidth(c: &mut Collector, cut: &Cutoff, sr: u32) {
     let sharp = cut.cliff_db >= SHARP_EDGE_DB;
 
     if sr < MIN_SPECTRAL_RATE {
-        c.findings.push("sample rate too low for the spectral test".into());
+        c.findings
+            .push("sample rate too low for the spectral test".into());
         return;
     }
 
@@ -289,7 +295,14 @@ mod tests {
     use crate::probe::Container;
     use std::path::PathBuf;
 
-    fn info(ext: &str, container: Container, codec: &str, lossless: bool, sr: u32, bits: u32) -> FileInfo {
+    fn info(
+        ext: &str,
+        container: Container,
+        codec: &str,
+        lossless: bool,
+        sr: u32,
+        bits: u32,
+    ) -> FileInfo {
         FileInfo {
             path: PathBuf::from(format!("x.{ext}")),
             size_bytes: 1,
@@ -444,7 +457,10 @@ mod tests {
         });
         let v = evaluate(&flac(44_100, 16), &e);
         assert_eq!(v.status, Status::Genuine);
-        assert!(v.reasons.iter().any(|r| r.contains("MD5 verified")), "{v:?}");
+        assert!(
+            v.reasons.iter().any(|r| r.contains("MD5 verified")),
+            "{v:?}"
+        );
     }
 
     #[test]

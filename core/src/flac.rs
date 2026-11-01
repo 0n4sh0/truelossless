@@ -100,11 +100,14 @@ fn push_pcm(out: &mut Vec<u8>, buf: &AudioBufferRef, bits: u32) -> bool {
     match buf {
         AudioBufferRef::S8(b) => interleave!(b, |o: &mut Vec<u8>, s: i8| o.push(s as u8)),
         AudioBufferRef::S16(b) => {
-            interleave!(b, |o: &mut Vec<u8>, s: i16| o.extend_from_slice(&s.to_le_bytes()))
+            interleave!(b, |o: &mut Vec<u8>, s: i16| o
+                .extend_from_slice(&s.to_le_bytes()))
         }
-        AudioBufferRef::S24(b) => interleave!(b, |o: &mut Vec<u8>, s: symphonia::core::sample::i24| {
-            o.extend_from_slice(&s.inner().to_le_bytes()[..3])
-        }),
+        AudioBufferRef::S24(b) => {
+            interleave!(b, |o: &mut Vec<u8>, s: symphonia::core::sample::i24| {
+                o.extend_from_slice(&s.inner().to_le_bytes()[..3])
+            })
+        }
         AudioBufferRef::S32(b) => {
             let bytes = bits.div_ceil(8).clamp(1, 4) as usize;
             let shift = 32 - bits.clamp(1, 32);
@@ -119,8 +122,8 @@ fn push_pcm(out: &mut Vec<u8>, buf: &AudioBufferRef, bits: u32) -> bool {
 /// Fully decode a FLAC file and compare the result with the stored MD5.
 /// This reads the whole file, so it is much slower than the spectrum check.
 pub fn verify_md5(path: &Path) -> Result<Md5Report, ProbeError> {
-    let info = read_streaminfo(path)?
-        .ok_or_else(|| ProbeError::Decode("not a FLAC file".into()))?;
+    let info =
+        read_streaminfo(path)?.ok_or_else(|| ProbeError::Decode("not a FLAC file".into()))?;
     if !info.has_md5() {
         return Ok(Md5Report {
             status: Md5Status::Unavailable,
@@ -134,11 +137,8 @@ pub fn verify_md5(path: &Path) -> Result<Md5Report, ProbeError> {
     let mut decode_errors = 0usize;
     let mut supported = true;
 
-    loop {
-        let packet = match o.format.next_packet() {
-            Ok(p) => p,
-            Err(_) => break, // end of stream (or unrecoverable read error)
-        };
+    // Stops at the end of the stream (or on an unrecoverable read error).
+    while let Ok(packet) = o.format.next_packet() {
         if packet.track_id() != o.track_id {
             continue;
         }
@@ -187,7 +187,7 @@ pub mod testflac {
         }
         fn put(&mut self, value: u32, n: u32) {
             for i in (0..n).rev() {
-                if self.used % 8 == 0 {
+                if self.used.is_multiple_of(8) {
                     self.bytes.push(0);
                 }
                 let bit = ((value >> i) & 1) as u8;
@@ -202,7 +202,11 @@ pub mod testflac {
         for &b in data {
             crc ^= b;
             for _ in 0..8 {
-                crc = if crc & 0x80 != 0 { (crc << 1) ^ 0x07 } else { crc << 1 };
+                crc = if crc & 0x80 != 0 {
+                    (crc << 1) ^ 0x07
+                } else {
+                    crc << 1
+                };
             }
         }
         crc
@@ -213,7 +217,11 @@ pub mod testflac {
         for &b in data {
             crc ^= (b as u16) << 8;
             for _ in 0..8 {
-                crc = if crc & 0x8000 != 0 { (crc << 1) ^ 0x8005 } else { crc << 1 };
+                crc = if crc & 0x8000 != 0 {
+                    (crc << 1) ^ 0x8005
+                } else {
+                    crc << 1
+                };
             }
         }
         crc
@@ -342,7 +350,15 @@ mod tests {
     #[test]
     fn intact_16_bit_stereo_file_matches() {
         let p = tmp("fc_ok16.flac");
-        write_flac(&p, 44_100, 2, 16, &noise_pcm(2 * 10_000, 16, 0), false, false);
+        write_flac(
+            &p,
+            44_100,
+            2,
+            16,
+            &noise_pcm(2 * 10_000, 16, 0),
+            false,
+            false,
+        );
         let r = verify_md5(&p).unwrap();
         std::fs::remove_file(&p).ok();
         assert_eq!(r.status, Md5Status::Match);

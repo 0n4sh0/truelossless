@@ -129,7 +129,8 @@ pub mod testutil {
             .collect();
         let mut f = std::fs::File::create(path).unwrap();
         f.write_all(b"RIFF").unwrap();
-        f.write_all(&(36 + data.len() as u32).to_le_bytes()).unwrap();
+        f.write_all(&(36 + data.len() as u32).to_le_bytes())
+            .unwrap();
         f.write_all(b"WAVEfmt ").unwrap();
         f.write_all(&16u32.to_le_bytes()).unwrap();
         f.write_all(&1u16.to_le_bytes()).unwrap();
@@ -177,13 +178,12 @@ mod tests {
             .map(|i| (std::f32::consts::TAU * 1000.0 * i as f32 / sr as f32).sin())
             .collect();
         let s = average_spectrum(&[sig], sr).unwrap();
-        let peak = s
-            .db
-            .iter()
-            .enumerate()
-            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
-            .unwrap()
-            .0;
+        let peak =
+            s.db.iter()
+                .enumerate()
+                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+                .unwrap()
+                .0;
         assert!((peak as f32 * s.bin_hz - 1000.0).abs() < 2.0 * s.bin_hz);
     }
 }

@@ -101,6 +101,10 @@ mod tests {
         std::fs::remove_file(&p).ok();
         let row = csv_line(&p, Ok(&r));
         // The reasons field is quoted but contains no commas here.
-        assert_eq!(row.split(',').count(), CSV_HEADER.split(',').count(), "{row}");
+        assert_eq!(
+            row.split(',').count(),
+            CSV_HEADER.split(',').count(),
+            "{row}"
+        );
     }
 }

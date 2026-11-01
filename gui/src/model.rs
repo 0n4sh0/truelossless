@@ -1,6 +1,6 @@
 use eframe::egui::Color32;
-use truelossless_core::{FileReport, Status};
 use std::path::PathBuf;
+use truelossless_core::{FileReport, Status};
 
 /// One row in the file list. `result` is `None` until the file is checked.
 pub struct Slot {
@@ -37,7 +37,12 @@ pub enum Filter {
 }
 
 impl Filter {
-    pub const CHOICES: [Filter; 4] = [Filter::All, Filter::Problems, Filter::Genuine, Filter::Lossy];
+    pub const CHOICES: [Filter; 4] = [
+        Filter::All,
+        Filter::Problems,
+        Filter::Genuine,
+        Filter::Lossy,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -127,7 +132,7 @@ pub fn outcome_label(o: Outcome) -> &'static str {
 
 /// "44.1 kHz" / "96 kHz".
 pub fn fmt_rate(hz: u32) -> String {
-    if hz % 1000 == 0 {
+    if hz.is_multiple_of(1000) {
         format!("{} kHz", hz / 1000)
     } else {
         format!("{:.1} kHz", hz as f32 / 1000.0)
@@ -183,8 +188,16 @@ mod tests {
     #[test]
     fn counts_pending_and_errors() {
         let slots = vec![
-            Slot { path: "a".into(), name: "a".into(), result: None },
-            Slot { path: "b".into(), name: "b".into(), result: Some(Err("x".into())) },
+            Slot {
+                path: "a".into(),
+                name: "a".into(),
+                result: None,
+            },
+            Slot {
+                path: "b".into(),
+                name: "b".into(),
+                result: Some(Err("x".into())),
+            },
         ];
         let c = Counts::of(&slots);
         assert_eq!((c.pending, c.errors), (1, 1));

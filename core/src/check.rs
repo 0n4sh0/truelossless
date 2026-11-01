@@ -123,7 +123,15 @@ mod tests {
     #[test]
     fn full_band_cd_flac_is_genuine_and_md5_verified() {
         let r = run("fc_chk_genuine.flac", |p| {
-            write_flac(p, 44_100, 1, 16, &pcm(44_100, 21_800.0, 16, 0), false, false)
+            write_flac(
+                p,
+                44_100,
+                1,
+                16,
+                &pcm(44_100, 21_800.0, 16, 0),
+                false,
+                false,
+            )
         });
         assert_eq!(r.verdict.status, Status::Genuine, "{:?}", r.verdict);
         assert!(r.verdict.reasons.iter().any(|x| x.contains("MD5 verified")));
@@ -132,7 +140,15 @@ mod tests {
     #[test]
     fn flac_with_16k_cutoff_is_fake() {
         let r = run("fc_chk_16k.flac", |p| {
-            write_flac(p, 44_100, 1, 16, &pcm(44_100, 16_000.0, 16, 0), false, false)
+            write_flac(
+                p,
+                44_100,
+                1,
+                16,
+                &pcm(44_100, 16_000.0, 16, 0),
+                false,
+                false,
+            )
         });
         assert_eq!(r.verdict.status, Status::Fake, "{:?}", r.verdict);
     }
@@ -140,16 +156,36 @@ mod tests {
     #[test]
     fn upsampled_96k_24bit_flac_is_fake() {
         let r = run("fc_chk_up96.flac", |p| {
-            write_flac(p, 96_000, 1, 24, &pcm(96_000, 22_000.0, 24, 0), false, false)
+            write_flac(
+                p,
+                96_000,
+                1,
+                24,
+                &pcm(96_000, 22_000.0, 24, 0),
+                false,
+                false,
+            )
         });
         assert_eq!(r.verdict.status, Status::Fake, "{:?}", r.verdict);
-        assert!(r.verdict.reasons[0].contains("upsampled"), "{:?}", r.verdict);
+        assert!(
+            r.verdict.reasons[0].contains("upsampled"),
+            "{:?}",
+            r.verdict
+        );
     }
 
     #[test]
     fn genuine_looking_96k_flac_with_padded_bits_is_fake() {
         let r = run("fc_chk_pad.flac", |p| {
-            write_flac(p, 96_000, 1, 24, &pcm(96_000, 44_000.0, 24, 8), false, false)
+            write_flac(
+                p,
+                96_000,
+                1,
+                24,
+                &pcm(96_000, 44_000.0, 24, 8),
+                false,
+                false,
+            )
         });
         assert_eq!(r.verdict.status, Status::Fake, "{:?}", r.verdict);
         assert!(
@@ -162,7 +198,15 @@ mod tests {
     #[test]
     fn genuine_96k_24bit_flac_passes() {
         let r = run("fc_chk_real96.flac", |p| {
-            write_flac(p, 96_000, 1, 24, &pcm(96_000, 44_000.0, 24, 0), false, false)
+            write_flac(
+                p,
+                96_000,
+                1,
+                24,
+                &pcm(96_000, 44_000.0, 24, 0),
+                false,
+                false,
+            )
         });
         assert_eq!(r.verdict.status, Status::Genuine, "{:?}", r.verdict);
     }
