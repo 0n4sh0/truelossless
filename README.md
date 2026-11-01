@@ -12,7 +12,7 @@ Scan folders for audio files and check whether they are what they claim to be
 ## Status
 
 - [x] Milestone 1: scan folders, detect real container/codec, flag extension mismatches
-- [ ] Milestone 2: decode + spectrum, cutoff detection
+- [x] Milestone 2: decode + spectrum, cutoff detection (`--analyze`)
 - [ ] Milestone 3: verdict engine (fake lossless, fake hi-res, bit depth)
 - [ ] Milestone 4: egui GUI
 

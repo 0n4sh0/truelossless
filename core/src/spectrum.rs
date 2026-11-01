@@ -120,6 +120,29 @@ pub(crate) mod testutil {
             .collect()
     }
 
+    /// Write mono 16-bit PCM WAV from float samples in [-1, 1].
+    pub fn write_wav(path: &std::path::Path, sample_rate: u32, samples: &[f32]) {
+        use std::io::Write;
+        let data: Vec<u8> = samples
+            .iter()
+            .flat_map(|s| ((s.clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes())
+            .collect();
+        let mut f = std::fs::File::create(path).unwrap();
+        f.write_all(b"RIFF").unwrap();
+        f.write_all(&(36 + data.len() as u32).to_le_bytes()).unwrap();
+        f.write_all(b"WAVEfmt ").unwrap();
+        f.write_all(&16u32.to_le_bytes()).unwrap();
+        f.write_all(&1u16.to_le_bytes()).unwrap();
+        f.write_all(&1u16.to_le_bytes()).unwrap();
+        f.write_all(&sample_rate.to_le_bytes()).unwrap();
+        f.write_all(&(sample_rate * 2).to_le_bytes()).unwrap();
+        f.write_all(&2u16.to_le_bytes()).unwrap();
+        f.write_all(&16u16.to_le_bytes()).unwrap();
+        f.write_all(b"data").unwrap();
+        f.write_all(&(data.len() as u32).to_le_bytes()).unwrap();
+        f.write_all(&data).unwrap();
+    }
+
     /// Band-limited test signal plus a very low noise floor (like dither).
     pub fn bandlimited_noise(sample_rate: u32, cutoff_hz: f32, secs: f32) -> Vec<f32> {
         let n = (sample_rate as f32 * secs) as usize;
