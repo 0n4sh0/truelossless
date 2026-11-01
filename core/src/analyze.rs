@@ -13,6 +13,10 @@ pub const WINDOW_SECS: f64 = 5.0;
 pub struct Analysis {
     pub spectrum: Spectrum,
     pub cutoff: Cutoff,
+    /// Width of the decoded integer samples (16 or 24), when known.
+    pub stored_bits: Option<u32>,
+    /// Bits that actually carry information (e.g. 16 inside a 24-bit file).
+    pub effective_bits: Option<u32>,
 }
 
 /// Decode excerpts of `path` and measure its spectral bandwidth.
@@ -22,7 +26,13 @@ pub fn analyze_file(path: &Path) -> Result<Analysis, ProbeError> {
         .ok_or_else(|| ProbeError::Decode("too short or silent to analyse".into()))?;
     let cutoff = detect_cutoff(&spectrum)
         .ok_or_else(|| ProbeError::Decode("sample rate too low to analyse".into()))?;
-    Ok(Analysis { spectrum, cutoff })
+    let stats = &decoded.bit_stats;
+    Ok(Analysis {
+        spectrum,
+        cutoff,
+        stored_bits: (stats.container_bits > 0).then_some(stats.container_bits),
+        effective_bits: stats.effective_bits(),
+    })
 }
 
 /// Analyse many files in parallel, preserving input order.
