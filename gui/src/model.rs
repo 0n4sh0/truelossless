@@ -149,9 +149,9 @@ pub fn bit_depth_text(info: &FileInfo) -> String {
 }
 
 /// Second line of a file-list row, e.g.
-/// "M4A · E-AC-3 · lossy · bit n/a · 48 kHz · 6 ch".
+/// "M4A · bit n/a · 48 kHz · 6 ch". The codec and the lossless or lossy
+/// label are left out: the status chip and the details panel carry them.
 pub fn row_summary(info: &FileInfo) -> String {
-    let kind = if info.lossless { "lossless" } else { "lossy" };
     let ext = if info.extension.is_empty() {
         info.container.name().to_string()
     } else {
@@ -162,13 +162,7 @@ pub fn row_summary(info: &FileInfo) -> String {
         None if !info.lossless => "bit n/a".into(),
         None => "-".into(),
     };
-    let codec = info.codec.to_uppercase();
-    // "FLAC · FLAC" would say the same thing twice.
-    let mut parts = vec![ext.clone()];
-    if codec != ext {
-        parts.push(codec);
-    }
-    parts.extend([kind.to_string(), bits]);
+    let mut parts = vec![ext, bits];
     if let Some(sr) = info.sample_rate {
         parts.push(fmt_rate(sr));
     }
@@ -266,7 +260,7 @@ mod tests {
         assert_eq!(bit_depth_text(&i), "n/a");
         assert_eq!(
             row_summary(&i),
-            "M4A \u{b7} E-AC-3 \u{b7} lossy \u{b7} bit n/a \u{b7} 48 kHz \u{b7} 6 ch"
+            "M4A \u{b7} bit n/a \u{b7} 48 kHz \u{b7} 6 ch"
         );
     }
 
@@ -274,10 +268,7 @@ mod tests {
     fn lossless_row_shows_bits_and_hides_stereo_channels() {
         let i = info(true, Some(24), 2);
         assert_eq!(bit_depth_text(&i), "24-bit");
-        assert_eq!(
-            row_summary(&i),
-            "M4A \u{b7} E-AC-3 \u{b7} lossless \u{b7} 24-bit \u{b7} 48 kHz"
-        );
+        assert_eq!(row_summary(&i), "M4A \u{b7} 24-bit \u{b7} 48 kHz");
         assert_eq!(bit_depth_text(&info(true, None, 2)), "-");
     }
 }
