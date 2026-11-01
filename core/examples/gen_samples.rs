@@ -1,12 +1,12 @@
 //! Generates a folder of synthetic audio files that exercise every verdict.
 //!
-//! cargo run -p flac-checker-core --features testgen --example gen_samples -- <out-dir>
+//! cargo run -p truelossless-core --features testgen --example gen_samples -- <out-dir>
 //!
 //! The audio is band-limited noise, so it is only useful for testing the
 //! checker and its UI, not for listening.
 
-use flac_checker_core::flac::testflac::write_flac;
-use flac_checker_core::spectrum::testutil::{bandlimited_noise, write_wav};
+use truelossless_core::flac::testflac::write_flac;
+use truelossless_core::spectrum::testutil::{bandlimited_noise, write_wav};
 use std::fs;
 use std::path::PathBuf;
 

@@ -7,7 +7,7 @@ mod style;
 mod worker;
 
 use eframe::egui::{self, Align, Align2, Color32, CornerRadius, FontId, Layout, Margin, RichText, Sense};
-use flac_checker_core::{csv_line, CheckOptions, FileReport, Md5Status, Status, CSV_HEADER};
+use truelossless_core::{csv_line, CheckOptions, FileReport, Md5Status, Status, CSV_HEADER};
 use model::{
     fmt_duration, fmt_rate, outcome_color, outcome_label, status_color, Counts, Filter, Outcome, Slot,
 };
@@ -32,7 +32,7 @@ fn main() -> eframe::Result {
         ..Default::default()
     };
     eframe::run_native(
-        "FLAC Checker",
+        "TrueLossless",
         options,
         Box::new(move |cc| {
             style::apply(&cc.egui_ctx);
@@ -176,7 +176,7 @@ impl App {
 
     fn export_csv(&mut self) {
         let Some(path) = rfd::FileDialog::new()
-            .set_file_name("flac-checker-report.csv")
+            .set_file_name("truelossless-report.csv")
             .add_filter("CSV", &["csv"])
             .save_file()
         else {
@@ -202,7 +202,7 @@ impl App {
     fn top_bar(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         ui.horizontal(|ui| {
-            ui.label(RichText::new("FLAC Checker").size(18.0).strong());
+            ui.label(RichText::new("TrueLossless").size(18.0).strong());
             ui.add_space(10.0);
 
             let open = egui::Button::new(RichText::new("Open folder").color(BG).strong()).fill(ACCENT);
@@ -213,7 +213,7 @@ impl App {
             }
             if ui.button("Open file").clicked() {
                 if let Some(file) = rfd::FileDialog::new()
-                    .add_filter("Audio", flac_checker_core::scan::AUDIO_EXTENSIONS)
+                    .add_filter("Audio", truelossless_core::scan::AUDIO_EXTENSIONS)
                     .pick_file()
                 {
                     self.start(file, &ctx);
@@ -404,7 +404,7 @@ impl App {
                 ui.add_space(4.0);
                 ui.label(
                     RichText::new(
-                        "Drop a folder here, or pick one. FLAC Checker looks for lossy \
+                        "Drop a folder here, or pick one. TrueLossless looks for lossy \
                          transcodes, upsampled hi-res and padded bit depth.",
                     )
                     .color(TEXT_DIM),

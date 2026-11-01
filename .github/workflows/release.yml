@@ -20,10 +20,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: windows-x64,  os: windows-latest,   target: x86_64-pc-windows-msvc,   ext: .exe, archive: zip }
-          - { name: linux-x64,    os: ubuntu-latest,    target: x86_64-unknown-linux-gnu, ext: "",   archive: tar.gz }
-          - { name: macos-arm64,  os: macos-latest,     target: aarch64-apple-darwin,     ext: "",   archive: tar.gz }
-          - { name: macos-x64,    os: macos-15-intel,   target: x86_64-apple-darwin,      ext: "",   archive: tar.gz }
+          - { name: windows-x64,  os: windows-latest,   target: x86_64-pc-windows-msvc,   ext: .exe, archive: zip,    upx: true }
+          - { name: linux-x64,    os: ubuntu-latest,    target: x86_64-unknown-linux-gnu, ext: "",   archive: tar.gz, upx: true }
+          - { name: macos-arm64,  os: macos-latest,     target: aarch64-apple-darwin,     ext: "",   archive: tar.gz, upx: false }
+          - { name: macos-x64,    os: macos-15-intel,   target: x86_64-apple-darwin,      ext: "",   archive: tar.gz, upx: false }
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -45,9 +45,9 @@ jobs:
         shell: bash
         run: |
           version="${GITHUB_REF_NAME:-dev}"
-          dir="flac-checker-${version}-${{ matrix.name }}"
+          dir="truelossless-${version}-${{ matrix.name }}"
           mkdir "$dir"
-          for bin in flac-checker flac-checker-gui; do
+          for bin in truelossless truelossless-gui; do
             cp "target/${{ matrix.target }}/release/${bin}${{ matrix.ext }}" "$dir/"
           done
           cp README.md "$dir/"
@@ -63,6 +63,40 @@ jobs:
         with:
           name: ${{ matrix.name }}
           path: ${{ env.ASSET }}
+
+      # Portable build: the same programs compressed with UPX (smaller download,
+      # slightly slower start-up). Skipped on macOS, where UPX breaks code signing.
+      - name: Install UPX
+        if: matrix.upx
+        uses: crazy-max/ghaction-upx@v3
+        with:
+          install-only: true
+      - name: Package portable (UPX)
+        if: matrix.upx
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME:-dev}"
+          dir="truelossless-${version}-${{ matrix.name }}-portable"
+          mkdir "$dir"
+          for bin in truelossless truelossless-gui; do
+            cp "target/${{ matrix.target }}/release/${bin}${{ matrix.ext }}" "$dir/"
+            upx --best --lzma "$dir/${bin}${{ matrix.ext }}"
+          done
+          cp README.md assets/icon.png "$dir/"
+          # Check that the compressed programs still start.
+          "$dir/truelossless${{ matrix.ext }}" --version
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            7z a "$dir.zip" "$dir" > /dev/null
+            echo "PORTABLE=$dir.zip" >> "$GITHUB_ENV"
+          else
+            tar czf "$dir.tar.gz" "$dir"
+            echo "PORTABLE=$dir.tar.gz" >> "$GITHUB_ENV"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: matrix.upx
+        with:
+          name: ${{ matrix.name }}-portable
+          path: ${{ env.PORTABLE }}
 
   publish:
     name: Publish release

@@ -832,37 +832,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1c66915cc5391097de7a2b0b972e8505aa33c0df401fd3a6811dbdb32881ba48"
 
 [[package]]
-name = "flac-checker"
-version = "0.1.0"
-dependencies = [
- "clap",
- "flac-checker-core",
-]
-
-[[package]]
-name = "flac-checker-core"
-version = "0.1.0"
-dependencies = [
- "md-5",
- "rayon",
- "realfft",
- "symphonia",
- "thiserror 2.0.21",
- "walkdir",
-]
-
-[[package]]
-name = "flac-checker-gui"
-version = "0.1.0"
-dependencies = [
- "eframe",
- "flac-checker-core",
- "rayon",
- "rfd",
- "winresource",
-]
-
-[[package]]
 name = "flate2"
 version = "1.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2937,6 +2906,37 @@ checksum = "1ad61aed86bc3faea4300c7aee358b4c6d0c8d6ccc36524c96e4c92ccf26e77e"
 dependencies = [
  "num-integer",
  "strength_reduce",
+]
+
+[[package]]
+name = "truelossless"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "truelossless-core",
+]
+
+[[package]]
+name = "truelossless-core"
+version = "0.1.0"
+dependencies = [
+ "md-5",
+ "rayon",
+ "realfft",
+ "symphonia",
+ "thiserror 2.0.21",
+ "walkdir",
+]
+
+[[package]]
+name = "truelossless-gui"
+version = "0.1.0"
+dependencies = [
+ "eframe",
+ "rayon",
+ "rfd",
+ "truelossless-core",
+ "winresource",
 ]
 
 [[package]]

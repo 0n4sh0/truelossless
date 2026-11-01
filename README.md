@@ -1,6 +1,6 @@
-<p align="center"><img src="assets/icon.png" width="128" alt="flac-checker icon"></p>
+<p align="center"><img src="assets/icon.png" width="128" alt="TrueLossless icon"></p>
 
-# flac-checker
+# TrueLossless
 
 [![CI](https://github.com/0n4sh0/truelossless/actions/workflows/ci.yml/badge.svg)](https://github.com/0n4sh0/truelossless/actions/workflows/ci.yml)
 
@@ -16,7 +16,7 @@ same Rust library. No ffmpeg or other runtime dependency is needed.
 
 A file named `song.flac` can still be an MP3 that someone re-encoded. Lossy
 encoders remove content above a certain frequency, and that gap stays visible
-after the file is converted to a lossless format. flac-checker decodes the audio,
+after the file is converted to a lossless format. TrueLossless decodes the audio,
 measures where the content really ends, and compares that with what the file
 claims to be.
 
@@ -27,6 +27,12 @@ claims to be.
 - Content-based detection: the container comes from the file's bytes, not its
   extension.
 - Spectrum plot (average of four 5-second excerpts) with the detected band limit.
+- Audio quality analysis: peak, true peak, RMS, dynamic range, integrated
+  loudness (LUFS), clipping count, bitrate and per-channel stats.
+- Spectrogram (time vs. frequency) for the mix and for each channel.
+- Audio quality analysis: peak, true peak, RMS, dynamic range, integrated
+  loudness (LUFS), clipping count, bitrate and per-channel stats.
+- Spectrogram (time vs. frequency) for the mix and for each channel.
 - Parallel analysis on all CPU cores.
 - Optional FLAC MD5 verification of the decoded audio.
 - CSV export from the CLI and the GUI.
@@ -64,15 +70,27 @@ holds both programs.
 
 | Platform | Archive |
 |---|---|
-| Windows (x64) | `flac-checker-<version>-windows-x64.zip` |
-| Linux (x64) | `flac-checker-<version>-linux-x64.tar.gz` |
-| macOS (Apple silicon) | `flac-checker-<version>-macos-arm64.tar.gz` |
-| macOS (Intel) | `flac-checker-<version>-macos-x64.tar.gz` |
+| Windows (x64) | `truelossless-<version>-windows-x64.zip` |
+| Linux (x64) | `truelossless-<version>-linux-x64.tar.gz` |
+| macOS (Apple silicon) | `truelossless-<version>-macos-arm64.tar.gz` |
+| macOS (Intel) | `truelossless-<version>-macos-x64.tar.gz` |
+
+Each platform also has a `-portable` archive (Windows and Linux) with the same
+programs compressed with [UPX](https://upx.github.io/). It is a smaller download
+and starts a little slower. Some antivirus programs flag UPX-packed files, so use
+the normal archive if that is a problem for you. macOS has no portable build,
+because UPX breaks macOS code signing.
+
+Each platform also has a `-portable` archive (Windows and Linux) with the same
+programs compressed with [UPX](https://upx.github.io/). It is a smaller download
+and starts a little slower. Some antivirus programs flag UPX-packed files, so use
+the normal archive if that is a problem for you. macOS has no portable build,
+because UPX breaks macOS code signing.
 
 Verify downloads with `SHA256SUMS.txt` from the same release.
 
 The binaries are not code-signed. On macOS, run
-`xattr -d com.apple.quarantine flac-checker*` once. On Windows, SmartScreen may
+`xattr -d com.apple.quarantine truelossless*` once. On Windows, SmartScreen may
 ask for confirmation.
 
 Or build from source (Rust 1.94 or newer):
@@ -90,11 +108,13 @@ OpenGL at run time.
 ### Command line
 
 ```
-flac-checker path/to/music
-flac-checker path/to/music --verify      # also verify FLAC MD5 (slower)
-flac-checker path/to/music --probe-only  # headers only (fast, no spectrum)
-flac-checker path/to/music --all         # show reasons for genuine files too
-flac-checker path/to/music --csv out.csv # write a CSV report
+truelossless path/to/music
+truelossless path/to/music --verify      # also verify FLAC MD5 (slower)
+truelossless path/to/music --probe-only  # headers only (fast, no spectrum)
+truelossless path/to/music --all         # show reasons for genuine files too
+truelossless path/to/music --quality     # also levels, LUFS, clipping (slower)
+truelossless path/to/music --quality     # also levels, LUFS, clipping (slower)
+truelossless path/to/music --csv out.csv # write a CSV report
 ```
 
 Exit codes: `0` normal, `1` no audio files found, `2` at least one file is
@@ -102,11 +122,14 @@ fake, corrupt or unreadable. This makes it usable in scripts.
 
 ### Desktop app
 
-Run `flac-checker-gui`, then pick **Open folder** or drop a folder or file onto
-the window. You can also pass a path: `flac-checker-gui path/to/music`.
+Run `truelossless-gui`, then pick **Open folder** or drop a folder or file onto
+the window. You can also pass a path: `truelossless-gui path/to/music`.
 
 - Left: the file list with a status chip, sample rate and bit depth.
-- Right: the verdict with its reasons, key figures, and the spectrum plot.
+- Right: the verdict with its reasons, key figures, the average spectrum, an
+  **Audio quality analysis** card and a **spectrogram** with Mix / per-channel tabs.
+  The quality figures are measured when you select a file (a full decode, so
+  it takes about a second per song).
 - Top bar: filter by status, enable MD5 verification, rescan, **Export CSV**.
 
 ### CSV
@@ -121,15 +144,15 @@ size_bytes, content_ends_khz, edge_db, md5`. Fields that start with `=`, `+`,
 ```
 assets/ app icon (icon.png, icon.ico), GitHub social preview, make_icon.py
 core/  analysis library: probe, decode, spectrum, cutoff, verdict, csv
-cli/   flac-checker command-line tool
-gui/   flac-checker-gui desktop app (egui)
+cli/   truelossless command-line tool
+gui/   truelossless-gui desktop app (egui)
 ```
 
 Generate demo files that trigger every verdict (synthetic noise, for testing
 only):
 
 ```
-cargo run -p flac-checker-core --features testgen --example gen_samples -- samples
+cargo run -p truelossless-core --features testgen --example gen_samples -- samples
 ```
 
 Run the tests with `cargo test --workspace`.
@@ -151,5 +174,7 @@ Run the tests with `cargo test --workspace`.
 - Thresholds are tuned on synthetic signals only. Real-world tuning is pending.
 - ALAC decoding is unverified against real files, because no encoder was
   available for the tests.
-- Mono-as-stereo, clipping and dynamic-range checks are not implemented.
+- Dynamic range is peak minus RMS (crest factor), not the DR-meter (TT DR) value.
+  Loudness is BS.1770 integrated LUFS with equal weight on every channel.
+- Mono-as-stereo detection is not implemented.
 - No Linux or Windows ARM builds yet.

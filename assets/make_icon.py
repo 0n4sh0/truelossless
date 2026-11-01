@@ -69,6 +69,6 @@ try:
     f1 = ImageFont.truetype("segoeuib.ttf", 92); f2 = ImageFont.truetype("segoeui.ttf", 40)
 except OSError:
     f1 = f2 = ImageFont.load_default()
-sd.text((590, 230), "flac-checker", font=f1, fill=(240, 244, 250, 255))
+sd.text((590, 230), "TrueLossless", font=f1, fill=(240, 244, 250, 255))
 sd.text((592, 350), "Is your lossless audio really lossless?", font=f2, fill=(138, 147, 166, 255))
 sp.convert("RGB").save(os.path.join(here, "social-preview.png"))

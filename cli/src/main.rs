@@ -1,6 +1,6 @@
 use clap::Parser;
-use flac_checker_core::{
-    check_many, csv_line, find_audio_files, CheckOptions, FileReport, Status, CSV_HEADER,
+use truelossless_core::{
+    analyze_quality, check_many, csv_line, find_audio_files, CheckOptions, FileReport, Status, CSV_HEADER,
 };
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -26,6 +26,10 @@ struct Args {
     /// List every file, including genuine ones (default hides their reasons).
     #[arg(short, long)]
     all: bool,
+
+    /// Also measure levels, loudness and clipping (decodes whole files; slow).
+    #[arg(short, long)]
+    quality: bool,
 
     /// Also write the full results to this CSV file.
     #[arg(long, value_name = "FILE")]
@@ -64,6 +68,9 @@ fn main() -> ExitCode {
                 counts[r.verdict.status as usize] += 1;
                 bad |= matches!(r.verdict.status, Status::Fake | Status::Corrupt);
                 print_report(&name, r);
+                if args.quality {
+                    print_quality(path);
+                }
                 if args.all || r.verdict.status != Status::Genuine {
                     for reason in &r.verdict.reasons {
                         println!("          - {reason}");
@@ -134,6 +141,21 @@ fn print_report(name: &str, r: &FileReport) {
             .as_ref()
             .map_or("-".into(), |a| format!("{:.1}k", a.cutoff.bandwidth_hz / 1000.0)),
     );
+}
+
+fn print_quality(path: &std::path::Path) {
+    match analyze_quality(path) {
+        Ok(q) => println!(
+            "          levels: peak {:.1} dB, true peak {:.1} dBTP, RMS {:.1} dB, DR {:.1} dB, {} LUFS, {} clipped",
+            q.peak_db,
+            q.true_peak_dbtp,
+            q.rms_db,
+            q.dynamic_range_db,
+            q.lufs.map_or("-".into(), |l| format!("{l:.1}")),
+            q.clipped
+        ),
+        Err(e) => println!("          levels: not available ({e})"),
+    }
 }
 
 fn truncate(s: &str, max: usize) -> String {

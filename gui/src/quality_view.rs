@@ -7,8 +7,8 @@ use eframe::egui::{
     self, Align2, Color32, ColorImage, CornerRadius, FontId, Pos2, Rect, RichText, Sense, Stroke,
     TextureHandle, TextureOptions, Vec2,
 };
-use flac_checker_core::quality::SPEC_DB_MIN;
-use flac_checker_core::{analyze_quality, FileReport, Quality};
+use truelossless_core::quality::SPEC_DB_MIN;
+use truelossless_core::{analyze_quality, FileReport, Quality};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender};

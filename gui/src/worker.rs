@@ -1,7 +1,7 @@
 //! Background scan: checks files in parallel and streams results to the UI.
 
 use eframe::egui;
-use flac_checker_core::{check_file, find_audio_files, CheckOptions, FileReport};
+use truelossless_core::{check_file, find_audio_files, CheckOptions, FileReport};
 use rayon::prelude::*;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};

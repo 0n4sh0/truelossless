@@ -2,7 +2,7 @@
 
 use crate::style::{alpha, ACCENT, BG, BORDER, TEXT_DIM};
 use eframe::egui::{self, Align2, Color32, CornerRadius, FontId, Pos2, Rect, Sense, Stroke, Vec2};
-use flac_checker_core::{Cutoff, Spectrum};
+use truelossless_core::{Cutoff, Spectrum};
 
 const DB_MIN: f32 = -120.0;
 const DB_MAX: f32 = 0.0;

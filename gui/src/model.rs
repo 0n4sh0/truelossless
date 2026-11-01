@@ -1,5 +1,5 @@
 use eframe::egui::Color32;
-use flac_checker_core::{FileReport, Status};
+use truelossless_core::{FileReport, Status};
 use std::path::PathBuf;
 
 /// One row in the file list. `result` is `None` until the file is checked.
