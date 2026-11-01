@@ -169,6 +169,14 @@ Run the tests with `cargo test --workspace`.
   git push origin v0.1.0
   ```
 
+## Contributing and security
+
+- Pull requests must pass `fmt`, `clippy` and the tests on Linux, Windows and macOS.
+- Report vulnerabilities privately, see [SECURITY.md](SECURITY.md).
+- The repository rules are in `.github/rulesets/` (import them under
+  Settings, Rules, Rulesets).
+- Licensed under the [MIT License](LICENSE).
+
 ## Known limits
 
 - Thresholds are tuned on synthetic signals only. Real-world tuning is pending.

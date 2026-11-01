@@ -1,0 +1,6 @@
+# Every change needs review from the owner. Workflows and the ruleset are
+# security-sensitive, so they are listed explicitly.
+*                 @0n4sh0
+/.github/         @0n4sh0
+/Cargo.toml       @0n4sh0
+/Cargo.lock       @0n4sh0
