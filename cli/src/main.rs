@@ -1,5 +1,7 @@
 use clap::Parser;
-use flac_checker_core::{check_many, find_audio_files, CheckOptions, FileReport, Status};
+use flac_checker_core::{
+    check_many, csv_line, find_audio_files, CheckOptions, FileReport, Status, CSV_HEADER,
+};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -24,6 +26,10 @@ struct Args {
     /// List every file, including genuine ones (default hides their reasons).
     #[arg(short, long)]
     all: bool,
+
+    /// Also write the full results to this CSV file.
+    #[arg(long, value_name = "FILE")]
+    csv: Option<PathBuf>,
 }
 
 fn main() -> ExitCode {
@@ -86,6 +92,26 @@ fn main() -> ExitCode {
         counts[Status::Unchecked as usize],
         errors
     );
+
+    if let Some(csv_path) = &args.csv {
+        let mut out = String::from(CSV_HEADER);
+        out.push('\n');
+        for (path, res) in &results {
+            match res {
+                Ok(r) => out.push_str(&csv_line(path, Ok(r))),
+                Err(e) => out.push_str(&csv_line(path, Err(&e.to_string()))),
+            }
+            out.push('\n');
+        }
+        match std::fs::write(csv_path, out) {
+            Ok(()) => eprintln!("Wrote {}", csv_path.display()),
+            Err(e) => {
+                eprintln!("Could not write {}: {e}", csv_path.display());
+                return ExitCode::from(2);
+            }
+        }
+    }
+
     if bad {
         ExitCode::from(2)
     } else {
