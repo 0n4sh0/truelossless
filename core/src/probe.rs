@@ -62,21 +62,27 @@ impl Container {
 
 /// Sniff the container from magic bytes, skipping a leading ID3v2 tag if present.
 pub fn sniff_container<R: Read + Seek>(r: &mut R) -> std::io::Result<Container> {
+    let offset = id3_end_offset(r)?;
+    let mut buf = [0u8; 12];
+    r.seek(SeekFrom::Start(offset))?;
+    let n = read_up_to(r, &mut buf)?;
+    Ok(sniff_bytes(&buf[..n]))
+}
+
+/// Offset where audio data starts: 0, or just past a leading ID3v2 tag.
+pub(crate) fn id3_end_offset<R: Read + Seek>(r: &mut R) -> std::io::Result<u64> {
     let mut head = [0u8; 10];
     r.seek(SeekFrom::Start(0))?;
     let n = read_up_to(r, &mut head)?;
-    let mut offset = 0u64;
     if n >= 10 && &head[0..3] == b"ID3" {
         let size = ((head[6] as u64 & 0x7f) << 21)
             | ((head[7] as u64 & 0x7f) << 14)
             | ((head[8] as u64 & 0x7f) << 7)
             | (head[9] as u64 & 0x7f);
-        offset = 10 + size;
+        Ok(10 + size)
+    } else {
+        Ok(0)
     }
-    let mut buf = [0u8; 12];
-    r.seek(SeekFrom::Start(offset))?;
-    let n = read_up_to(r, &mut buf)?;
-    Ok(sniff_bytes(&buf[..n]))
 }
 
 fn read_up_to<R: Read>(r: &mut R, buf: &mut [u8]) -> std::io::Result<usize> {

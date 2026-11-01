@@ -109,6 +109,7 @@ pub fn decode_windows(
         .ok_or_else(|| ProbeError::Decode("unknown sample rate".into()))?;
     let total_secs = params.n_frames.map(|n| n as f64 / sample_rate as f64);
 
+    let declared = params.bits_per_sample.or(params.bits_per_coded_sample);
     let want = (window_secs * sample_rate as f64) as usize;
     let mut windows = Vec::new();
     let mut stats = BitStats::default();
@@ -134,6 +135,7 @@ pub fn decode_windows(
                     decoder.as_mut(),
                     track_id,
                     want,
+                    declared,
                     &mut stats,
                 );
                 if !w.is_empty() {
@@ -151,6 +153,7 @@ pub fn decode_windows(
                 decoder.as_mut(),
                 track_id,
                 (cap * sample_rate as f64) as usize,
+                declared,
                 &mut stats,
             );
             if !w.is_empty() {
@@ -169,10 +172,19 @@ pub fn decode_windows(
     })
 }
 
-fn integer_bits(buf: &AudioBufferRef) -> u32 {
+/// Sample width in bits when the buffer holds exact 16/24-bit integers.
+///
+/// Some decoders (FLAC) always return 32-bit buffers with the real samples
+/// left-aligned, so for those the file's declared width is used. Converting
+/// to `f32` and scaling by the declared width still yields exact integers.
+fn integer_bits(buf: &AudioBufferRef, declared: Option<u32>) -> u32 {
     match buf {
         AudioBufferRef::S16(_) => 16,
         AudioBufferRef::S24(_) => 24,
+        AudioBufferRef::S32(_) => match declared {
+            Some(b @ (16 | 24)) => b,
+            _ => 0,
+        },
         _ => 0,
     }
 }
@@ -183,6 +195,7 @@ fn collect(
     decoder: &mut dyn Decoder,
     track_id: u32,
     want: usize,
+    declared_bits: Option<u32>,
     stats: &mut BitStats,
 ) -> Vec<f32> {
     let mut out = Vec::with_capacity(want);
@@ -200,7 +213,7 @@ fn collect(
             Ok(buf) => {
                 let spec = *buf.spec();
                 let ch = spec.channels.count().max(1);
-                let bits = integer_bits(&buf);
+                let bits = integer_bits(&buf, declared_bits);
                 if stats.container_bits == 0 {
                     stats.container_bits = bits;
                 }

@@ -10,4 +10,5 @@ symphonia = { version = "0.5", default-features = false, features = ["flac", "al
 walkdir = "2"
 rayon = "1"
 realfft = "3"
+md-5 = "0.10"
 thiserror = "2"
