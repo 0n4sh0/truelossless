@@ -294,10 +294,8 @@ fn feed(meter: &mut Meter, bytes: &mut Vec<u8>, ch: usize) {
     if usable == 0 {
         return;
     }
-    let samples: Vec<f32> = bytes[..usable]
-        .chunks_exact(4)
-        .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-        .collect();
+    let (words, _) = bytes[..usable].as_chunks::<4>();
+    let samples: Vec<f32> = words.iter().map(|b| f32::from_le_bytes(*b)).collect();
     meter.push(&samples, ch);
     bytes.drain(..usable);
 }
