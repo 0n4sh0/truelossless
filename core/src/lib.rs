@@ -2,6 +2,7 @@
 //! their spectrum.
 
 pub mod cutoff;
+pub mod decode;
 pub mod probe;
 pub mod scan;
 pub mod spectrum;
