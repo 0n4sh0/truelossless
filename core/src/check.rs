@@ -34,7 +34,14 @@ pub struct FileReport {
     pub analysis_error: Option<String>,
 }
 
+/// Check one file. A panic inside a decoder (possible on malformed input) is
+/// reported as an error for that file instead of aborting the whole scan.
 pub fn check_file(path: &Path, opts: CheckOptions) -> Result<FileReport, ProbeError> {
+    std::panic::catch_unwind(|| check_file_inner(path, opts))
+        .unwrap_or_else(|_| Err(ProbeError::Decode("decoder crashed on this file".into())))
+}
+
+fn check_file_inner(path: &Path, opts: CheckOptions) -> Result<FileReport, ProbeError> {
     let info = probe_file(path)?;
 
     // Lossy files are judged on their codec alone; skip the expensive work.
