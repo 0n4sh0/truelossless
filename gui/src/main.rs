@@ -18,11 +18,15 @@ use worker::{start_scan, Msg, ScanHandle};
 fn main() -> eframe::Result {
     // Optional first argument: a folder or file to scan on start-up.
     let initial = std::env::args_os().nth(1).map(PathBuf::from);
-    let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
+    let mut viewport = egui::ViewportBuilder::default()
             .with_inner_size([1180.0, 720.0])
             .with_min_inner_size([820.0, 480.0])
-            .with_drag_and_drop(true),
+            .with_drag_and_drop(true);
+    if let Ok(icon) = eframe::icon_data::from_png_bytes(include_bytes!("../../assets/icon.png")) {
+        viewport = viewport.with_icon(icon);
+    }
+    let options = eframe::NativeOptions {
+        viewport,
         ..Default::default()
     };
     eframe::run_native(
