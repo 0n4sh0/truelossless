@@ -7,7 +7,7 @@ Scan folders for audio files and check whether they are what they claim to be
 
 - `core/` – analysis library (probe, decode, spectrum, verdicts)
 - `cli/`  – `flac-checker <folder-or-file>`
-- `gui/`  – egui app (planned)
+- `gui/`  – `flac-checker-gui`, minimal egui app
 
 ## What it checks
 
@@ -32,6 +32,8 @@ flac-checker path/to/music --probe-only  # headers only (fast)
 flac-checker path/to/music --all         # show reasons for genuine files too
 ```
 
+GUI: `cargo run --release -p flac-checker-gui`, or drop a folder onto the window.
+
 Exit code is `2` if any file is fake, corrupt or unreadable.
 
 ## Status
@@ -39,7 +41,7 @@ Exit code is `2` if any file is fake, corrupt or unreadable.
 - [x] Milestone 1: scan folders, detect real container/codec, flag extension mismatches
 - [x] Milestone 2: decode + spectrum, cutoff detection
 - [x] Milestone 3: verdict engine (fake lossless, fake hi-res, bit depth, MD5)
-- [ ] Milestone 4: egui GUI
+- [x] Milestone 4: egui GUI (folder picker, drag-drop, list + spectrum + details)
 - [ ] Milestone 5: CSV export, drag-and-drop, release build
 
 ## Known limits
