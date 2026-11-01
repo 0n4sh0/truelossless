@@ -2,6 +2,7 @@
 
 mod model;
 mod plot;
+mod quality_view;
 mod style;
 mod worker;
 
@@ -13,6 +14,7 @@ use model::{
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use style::{alpha, card, chip, tile, tinted_card, ACCENT, BG, PANEL, TEXT_DIM};
+use quality_view::QualityStore;
 use worker::{start_scan, Msg, ScanHandle};
 
 fn main() -> eframe::Result {
@@ -54,6 +56,7 @@ struct App {
     filter: Option<Filter>,
     verify_md5: bool,
     notice: Option<(String, Instant)>,
+    quality: QualityStore,
 }
 
 impl App {
@@ -73,6 +76,7 @@ impl App {
         self.scan = Some(start_scan(root.clone(), opts, ctx.clone()));
         self.root = Some(root);
         self.slots.clear();
+        self.quality.clear();
         self.selected = None;
         self.done = 0;
     }
@@ -444,12 +448,12 @@ impl App {
                     ui.label(e);
                 });
             }
-            Some(Ok(r)) => report_view(ui, slot, r),
+            Some(Ok(r)) => report_view(ui, slot, r, &mut self.quality),
         }
     }
 }
 
-fn report_view(ui: &mut egui::Ui, slot: &Slot, r: &FileReport) {
+fn report_view(ui: &mut egui::Ui, slot: &Slot, r: &FileReport, quality: &mut QualityStore) {
     let color = status_color(r.verdict.status);
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         ui.add_space(4.0);
@@ -502,6 +506,8 @@ fn report_view(ui: &mut egui::Ui, slot: &Slot, r: &FileReport) {
                 plot::spectrum_plot(ui, &a.spectrum, &a.cutoff);
             });
         }
+
+        quality_view::show(ui, quality, &slot.path, r);
 
         card().show(ui, |ui| {
             ui.set_width(ui.available_width());
@@ -571,6 +577,7 @@ impl eframe::App for App {
             self.start(path, &ctx);
         }
         self.pump_messages();
+        self.quality.poll();
         self.handle_drop(&ctx);
         self.handle_keys(&ctx);
 
