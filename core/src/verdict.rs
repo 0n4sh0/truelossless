@@ -152,7 +152,7 @@ pub fn evaluate(info: &FileInfo, ev: &Evidence) -> Verdict {
         match kind {
             CodecKind::Lossy => c.flag(
                 Status::Lossy,
-                format!("{name}{note}: lossy by design, audio not decoded"),
+                format!("{name}{note}: lossy by design, no authenticity test applies"),
             ),
             CodecKind::Lossless => c.flag(
                 Status::Unchecked,

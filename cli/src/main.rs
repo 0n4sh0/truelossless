@@ -3,13 +3,23 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use truelossless_core::{
     analyze_quality_with, check_many, csv_line, find_audio_files, locate_ffmpeg, CheckOptions,
-    FileReport, Status, Toolchain, CSV_HEADER,
+    DecoderMode, FileReport, QualityOptions, Status, Toolchain, CSV_HEADER,
 };
 
 /// Check whether audio files are really lossless / hi-res.
 ///
 /// Exit code: 0 = no problems, 1 = nothing to scan, 2 = at least one
 /// fake, corrupt or unreadable file was found.
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum DecoderArg {
+    /// Built-in decoders first, ffmpeg when they fail or lack the format.
+    Auto,
+    /// Built-in decoders only.
+    Native,
+    /// ffmpeg only.
+    Ffmpeg,
+}
+
 #[derive(Parser)]
 #[command(
     version,
@@ -41,6 +51,10 @@ struct Args {
     /// itself (also read from TRUELOSSLESS_FFMPEG, then searched for).
     #[arg(long, value_name = "PATH")]
     ffmpeg: Option<PathBuf>,
+
+    /// Decoder for --quality. In auto mode a failure retries with the other.
+    #[arg(long, value_enum, default_value_t = DecoderArg::Auto)]
+    decoder: DecoderArg,
 
     /// Also write the full results to this CSV file.
     #[arg(long, value_name = "FILE")]
@@ -101,7 +115,17 @@ fn main() -> ExitCode {
                 bad |= matches!(r.verdict.status, Status::Fake | Status::Corrupt);
                 print_report(&name, r);
                 if args.quality {
-                    print_quality(path, ffmpeg.as_ref(), r.info.header_only.is_some());
+                    let mode = match args.decoder {
+                        DecoderArg::Auto => DecoderMode::Auto,
+                        DecoderArg::Native => DecoderMode::Native,
+                        DecoderArg::Ffmpeg => DecoderMode::Ffmpeg,
+                    };
+                    let qo = QualityOptions {
+                        mode,
+                        header_only: r.info.header_only.is_some(),
+                        duration_hint: r.info.duration_secs,
+                    };
+                    print_quality(path, ffmpeg.as_ref(), qo);
                 }
                 if args.all || r.verdict.status != Status::Genuine {
                     for reason in &r.verdict.reasons {
@@ -180,14 +204,15 @@ fn print_report(name: &str, r: &FileReport) {
     );
 }
 
-fn print_quality(path: &std::path::Path, ffmpeg: Option<&Toolchain>, header_only: bool) {
-    if header_only && ffmpeg.is_none() {
+fn print_quality(path: &std::path::Path, ffmpeg: Option<&Toolchain>, qo: QualityOptions) {
+    if qo.header_only && ffmpeg.is_none() && qo.mode != DecoderMode::Native {
         println!("          levels: needs ffmpeg for this format (use --ffmpeg PATH)");
         return;
     }
-    match analyze_quality_with(path, ffmpeg, header_only) {
+    match analyze_quality_with(path, ffmpeg, qo) {
         Ok(q) => println!(
-            "          levels: peak {:.1} dB, true peak {:.1} dBTP, RMS {:.1} dB, DR {:.1} dB, {} LUFS, {} clipped",
+            "          levels ({}): peak {:.1} dB, true peak {:.1} dBTP, RMS {:.1} dB, DR {:.1} dB, {} LUFS, {} clipped",
+            q.decoder.name(),
             q.peak_db,
             q.true_peak_dbtp,
             q.rms_db,

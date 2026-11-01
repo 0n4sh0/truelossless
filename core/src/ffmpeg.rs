@@ -306,11 +306,16 @@ fn feed(meter: &mut Meter, bytes: &mut Vec<u8>, ch: usize) {
 ///
 /// ffmpeg decodes the first audio stream to 32-bit float PCM in its native
 /// channel order. For Dolby Atmos this is the 5.1/7.1 bed only.
-pub fn analyze_quality_ffmpeg(tc: &Toolchain, path: &Path) -> Result<Quality, ProbeError> {
+pub fn analyze_quality_ffmpeg(
+    tc: &Toolchain,
+    path: &Path,
+    duration_hint: Option<f64>,
+) -> Result<Quality, ProbeError> {
     let info = probe_stream(tc, path)?;
     let size = std::fs::metadata(path).map(|m| m.len()).ok();
-    let n_frames = info
-        .duration_secs
+    let n_frames = duration_hint
+        .filter(|d| *d > 0.0)
+        .or(info.duration_secs)
         .map(|d| (d * info.sample_rate as f64) as u64);
     let mut meter = Meter::new(info.sample_rate, 24, n_frames);
     let max_frames = info.sample_rate as u64 * 3600 * MAX_HOURS;
@@ -356,7 +361,9 @@ pub fn analyze_quality_ffmpeg(tc: &Toolchain, path: &Path) -> Result<Quality, Pr
     // Stop ffmpeg if it is still running (cap reached), then reap it.
     let _ = child.kill();
     let _ = child.wait();
-    meter.finish(size)
+    let mut q = meter.finish(size)?;
+    q.decoder = crate::quality::Decoder::Ffmpeg;
+    Ok(q)
 }
 
 #[cfg(test)]

@@ -22,6 +22,46 @@ pub const SPEC_DB_MIN: f32 = -120.0;
 /// Most channels that get their own spectrogram layer.
 const MAX_LAYERS: usize = 8;
 
+/// Which decoder produced a measurement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Decoder {
+    /// The built-in Symphonia decoders.
+    Native,
+    /// An external ffmpeg.
+    Ffmpeg,
+}
+
+impl Decoder {
+    pub fn name(self) -> &'static str {
+        match self {
+            Decoder::Native => "built-in",
+            Decoder::Ffmpeg => "ffmpeg",
+        }
+    }
+}
+
+/// Which decoder to use for a measurement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DecoderMode {
+    /// Built-in first; ffmpeg when that fails or the format is unsupported.
+    #[default]
+    Auto,
+    /// Built-in only.
+    Native,
+    /// ffmpeg only.
+    Ffmpeg,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct QualityOptions {
+    pub mode: DecoderMode,
+    /// The format is known to be unsupported by the built-in decoders.
+    pub header_only: bool,
+    /// Duration from our own header parsing, trusted over ffmpeg's banner
+    /// (which only counts the first fragment of fragmented MP4).
+    pub duration_hint: Option<f64>,
+}
+
 #[derive(Debug, Clone)]
 pub struct ChannelStats {
     pub peak_db: f64,
@@ -54,6 +94,7 @@ impl Spectrogram {
 
 #[derive(Debug, Clone)]
 pub struct Quality {
+    pub decoder: Decoder,
     pub sample_rate: u32,
     pub channels: usize,
     pub duration_secs: f64,
@@ -403,6 +444,7 @@ impl Meter {
         let peak_db = to_db(peak);
 
         Ok(Quality {
+            decoder: Decoder::Native,
             sample_rate,
             channels: chans.len(),
             duration_secs,
@@ -425,20 +467,42 @@ impl Meter {
     }
 }
 
-/// Like [`analyze_quality`], but uses ffmpeg when Symphonia cannot decode the
-/// file (or when `header_only` says the codec is known to be unsupported).
+/// Measure `path` with the decoder(s) chosen in `opts`.
+///
+/// In [`DecoderMode::Auto`] a failure of the first decoder falls back to the
+/// other, and if both fail the error names both reasons.
 pub fn analyze_quality_with(
     path: &Path,
     ffmpeg: Option<&crate::ffmpeg::Toolchain>,
-    header_only: bool,
+    opts: QualityOptions,
 ) -> Result<Quality, ProbeError> {
-    let Some(tc) = ffmpeg else {
-        return analyze_quality(path);
+    let run_ffmpeg = |tc: &crate::ffmpeg::Toolchain| {
+        crate::ffmpeg::analyze_quality_ffmpeg(tc, path, opts.duration_hint)
     };
-    if header_only {
-        return crate::ffmpeg::analyze_quality_ffmpeg(tc, path);
+    match (opts.mode, ffmpeg) {
+        (DecoderMode::Native, _) => analyze_quality(path),
+        (DecoderMode::Ffmpeg, None) => Err(ProbeError::Decode(
+            "ffmpeg was requested but was not found".into(),
+        )),
+        (DecoderMode::Ffmpeg, Some(tc)) => run_ffmpeg(tc),
+        (DecoderMode::Auto, None) => analyze_quality(path),
+        (DecoderMode::Auto, Some(tc)) => {
+            let (first, second): (Decoder, Decoder) = if opts.header_only {
+                (Decoder::Ffmpeg, Decoder::Native)
+            } else {
+                (Decoder::Native, Decoder::Ffmpeg)
+            };
+            let run = |d: Decoder| match d {
+                Decoder::Native => analyze_quality(path),
+                Decoder::Ffmpeg => run_ffmpeg(tc),
+            };
+            run(first).or_else(|e1| {
+                run(second).map_err(|e2| {
+                    ProbeError::Decode(format!("{}: {e1}; {}: {e2}", first.name(), second.name()))
+                })
+            })
+        }
     }
-    analyze_quality(path).or_else(|_| crate::ffmpeg::analyze_quality_ffmpeg(tc, path))
 }
 
 /// Decode the whole file and measure its levels, loudness and spectrogram.
@@ -614,5 +678,21 @@ mod tests {
         let q = m.finish(None).unwrap();
         assert!(q.lufs.is_none(), "{:?}", q.lufs);
         assert_eq!(q.channels, 6);
+    }
+
+    #[test]
+    fn decoder_modes_without_ffmpeg() {
+        let p = std::env::temp_dir().join("fc_q_modes.wav");
+        write_wav(&p, 44_100, &sine(44_100, 3.0, 997.0, 0.5));
+        let opts = |mode| QualityOptions {
+            mode,
+            ..Default::default()
+        };
+        let auto = analyze_quality_with(&p, None, opts(DecoderMode::Auto)).unwrap();
+        assert_eq!(auto.decoder, Decoder::Native);
+        assert!(analyze_quality_with(&p, None, opts(DecoderMode::Native)).is_ok());
+        let e = analyze_quality_with(&p, None, opts(DecoderMode::Ffmpeg)).unwrap_err();
+        assert!(e.to_string().contains("ffmpeg"), "{e}");
+        std::fs::remove_file(&p).ok();
     }
 }
