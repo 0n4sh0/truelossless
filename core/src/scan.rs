@@ -3,7 +3,9 @@ use walkdir::WalkDir;
 
 /// Extensions we consider candidates for analysis (lowercase, no dot).
 pub const AUDIO_EXTENSIONS: &[&str] = &[
-    "flac", "m4a", "alac", "mp4", "wav", "aif", "aiff", "mp3", "aac", "ogg", "oga", "opus",
+    "flac", "m4a", "alac", "mp4", "wav", "aif", "aiff", "mp3", "aac", "ogg", "oga", "opus", "ac3",
+    "eac3", "ec3", "dts", "dtshd", "thd", "mlp", "truehd", "wv", "ape", "tta", "dsf", "dff", "mpc",
+    "wma", "mka",
 ];
 
 pub fn is_audio_path(path: &Path) -> bool {

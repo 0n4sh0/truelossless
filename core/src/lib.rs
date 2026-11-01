@@ -10,6 +10,7 @@ pub mod flac;
 pub mod probe;
 pub mod quality;
 pub mod scan;
+pub mod special;
 pub mod spectrum;
 pub mod verdict;
 
@@ -21,5 +22,6 @@ pub use flac::{read_streaminfo, verify_md5, Md5Report, Md5Status, StreamInfo};
 pub use probe::{probe_file, probe_many, Container, FileInfo, ProbeError};
 pub use quality::{analyze_quality, ChannelStats, Quality, Spectrogram};
 pub use scan::find_audio_files;
+pub use special::CodecKind;
 pub use spectrum::{average_spectrum, Spectrum};
 pub use verdict::{evaluate, Evidence, Status, Verdict};

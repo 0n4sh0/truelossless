@@ -1,3 +1,4 @@
+use crate::special::{self, CodecKind};
 use rayon::prelude::*;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
@@ -28,6 +29,19 @@ pub enum Container {
     Mp3,
     Aac,
     Ogg,
+    /// Dolby AC-3 / E-AC-3 elementary stream.
+    Ac3,
+    Dts,
+    /// Dolby TrueHD / MLP.
+    Mlp,
+    WavPack,
+    Ape,
+    Tta,
+    /// DSD (DSF or DFF).
+    Dsd,
+    Musepack,
+    Asf,
+    Matroska,
     Unknown,
 }
 
@@ -41,6 +55,16 @@ impl Container {
             Container::Mp3 => "MP3",
             Container::Aac => "AAC",
             Container::Ogg => "OGG",
+            Container::Ac3 => "AC-3",
+            Container::Dts => "DTS",
+            Container::Mlp => "MLP",
+            Container::WavPack => "WavPack",
+            Container::Ape => "APE",
+            Container::Tta => "TTA",
+            Container::Dsd => "DSD",
+            Container::Musepack => "Musepack",
+            Container::Asf => "ASF",
+            Container::Matroska => "Matroska",
             Container::Unknown => "?",
         }
     }
@@ -55,6 +79,16 @@ impl Container {
             "mp3" => Container::Mp3,
             "aac" => Container::Aac,
             "ogg" | "oga" | "opus" => Container::Ogg,
+            "ac3" | "eac3" | "ec3" => Container::Ac3,
+            "dts" | "dtshd" => Container::Dts,
+            "thd" | "mlp" | "truehd" => Container::Mlp,
+            "wv" => Container::WavPack,
+            "ape" => Container::Ape,
+            "tta" => Container::Tta,
+            "dsf" | "dff" => Container::Dsd,
+            "mpc" => Container::Musepack,
+            "wma" | "asf" => Container::Asf,
+            "mka" | "mkv" | "webm" => Container::Matroska,
             _ => Container::Unknown,
         }
     }
@@ -139,6 +173,11 @@ pub struct FileInfo {
     pub duration_secs: Option<f64>,
     /// True when the extension promises a different container than the content.
     pub extension_mismatch: bool,
+    /// Set when only the header was identified because the codec cannot be
+    /// decoded here. `None` for fully supported files.
+    pub header_only: Option<CodecKind>,
+    /// Extra detail from the header, e.g. "Dolby Atmos (JOC, complexity 16)".
+    pub note: Option<String>,
 }
 
 pub fn probe_file(path: &Path) -> Result<FileInfo, ProbeError> {
@@ -154,6 +193,26 @@ pub fn probe_file(path: &Path) -> Result<FileInfo, ProbeError> {
         .to_ascii_lowercase();
     let expected = Container::from_extension(&extension);
     let extension_mismatch = expected != Container::Unknown && expected != container;
+
+    // Formats we cannot decode are identified from the header alone.
+    if let Some(sp) = special::identify(path)? {
+        let extension_mismatch = expected != Container::Unknown && expected != sp.container;
+        return Ok(FileInfo {
+            path: path.to_path_buf(),
+            size_bytes,
+            extension,
+            container: sp.container,
+            codec: sp.codec,
+            lossless: sp.kind == CodecKind::Lossless,
+            sample_rate: sp.sample_rate,
+            bits_per_sample: sp.bits,
+            channels: sp.channels,
+            duration_secs: None,
+            extension_mismatch,
+            header_only: Some(sp.kind),
+            note: sp.note,
+        });
+    }
 
     // No extension hint: we want content-based detection, not trust in the name.
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
@@ -193,6 +252,8 @@ pub fn probe_file(path: &Path) -> Result<FileInfo, ProbeError> {
         channels: p.channels.map(|c| c.count()),
         duration_secs,
         extension_mismatch,
+        header_only: None,
+        note: None,
     })
 }
 

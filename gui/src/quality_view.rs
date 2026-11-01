@@ -96,6 +96,16 @@ impl QualityStore {
 
 /// Draw the quality card and the spectrogram for `path`.
 pub fn show(ui: &mut egui::Ui, store: &mut QualityStore, path: &Path, r: &FileReport) {
+    if r.info.header_only.is_some() {
+        card().show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(
+                RichText::new("Levels and spectrogram are not available: this codec is identified from its header only.")
+                    .color(TEXT_DIM),
+            );
+        });
+        return;
+    }
     store.ensure(path, ui.ctx());
     let Some(entry) = store.map.get_mut(path) else {
         card().show(ui, |ui| {

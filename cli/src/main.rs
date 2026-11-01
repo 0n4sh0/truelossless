@@ -74,7 +74,7 @@ fn main() -> ExitCode {
                 counts[r.verdict.status as usize] += 1;
                 bad |= matches!(r.verdict.status, Status::Fake | Status::Corrupt);
                 print_report(&name, r);
-                if args.quality {
+                if args.quality && r.info.header_only.is_none() {
                     print_quality(path);
                 }
                 if args.all || r.verdict.status != Status::Genuine {
