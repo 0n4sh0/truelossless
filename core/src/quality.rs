@@ -246,6 +246,201 @@ impl SpecBuilder {
     }
 }
 
+/// BS.1770 channel weights (applied to mean-square energy) for the usual
+/// 5.1 and 7.1 orders: L R C LFE then surrounds. The LFE does not count and
+/// surround channels count +1.5 dB. Other layouts weigh every channel equally.
+pub(crate) fn loudness_weights(channels: usize) -> Vec<f64> {
+    const SURROUND: f64 = 1.41;
+    match channels {
+        6 => vec![1.0, 1.0, 1.0, 0.0, SURROUND, SURROUND],
+        8 => vec![1.0, 1.0, 1.0, 0.0, SURROUND, SURROUND, SURROUND, SURROUND],
+        n => vec![1.0; n],
+    }
+}
+
+/// Streaming meter: feed interleaved samples, then call [`Meter::finish`].
+pub(crate) struct Meter {
+    sample_rate: u32,
+    clip_level: f32,
+    hop: u64,
+    kernels: [[f32; TP_TAPS]; 3],
+    step_len: u64,
+    chans: Vec<ChannelState>,
+    weights: Vec<f64>,
+    spec: Option<SpecBuilder>,
+    frame: u64,
+    step_energy: f64,
+    steps: Vec<f64>,
+    values: Vec<f32>,
+}
+
+impl Meter {
+    /// `declared_bits` sets the clipping level; `n_frames` (if known) sets
+    /// the spectrogram spacing.
+    pub(crate) fn new(sample_rate: u32, declared_bits: u32, n_frames: Option<u64>) -> Self {
+        let bits = declared_bits.clamp(8, 24);
+        Meter {
+            sample_rate,
+            clip_level: (1.0 - 2f64.powi(1 - bits as i32)) as f32,
+            hop: n_frames
+                .map(|n| (n / SPEC_TARGET_COLS).max(SPEC_WIN as u64))
+                .unwrap_or(8192),
+            kernels: true_peak_kernels(),
+            step_len: (sample_rate / 10).max(1) as u64,
+            chans: Vec::new(),
+            weights: Vec::new(),
+            spec: None,
+            frame: 0,
+            step_energy: 0.0,
+            steps: Vec::new(),
+            values: Vec::new(),
+        }
+    }
+
+    pub(crate) fn frames(&self) -> u64 {
+        self.frame
+    }
+
+    /// Add whole frames of `ch` interleaved channels. A change of channel
+    /// count after the first call is ignored.
+    pub(crate) fn push(&mut self, samples: &[f32], ch: usize) {
+        if ch == 0 {
+            return;
+        }
+        if self.chans.is_empty() {
+            let fs = self.sample_rate as f64;
+            self.chans = (0..ch)
+                .map(|_| ChannelState {
+                    peak: 0.0,
+                    true_peak: 0.0,
+                    sum_sq: 0.0,
+                    clipped: 0,
+                    hist: [0.0; TP_TAPS],
+                    filter: k_weighting(fs),
+                })
+                .collect();
+            self.weights = loudness_weights(ch);
+            let layers = if ch > 1 { 1 + ch.min(MAX_LAYERS) } else { 1 };
+            self.spec = Some(SpecBuilder::new(layers, self.hop));
+            self.values = vec![0.0; layers];
+        }
+        if ch != self.chans.len() {
+            return;
+        }
+        for fr in samples.chunks_exact(ch) {
+            let mut mix = 0.0f32;
+            let mut loud = 0.0f64;
+            for (c, &s) in fr.iter().enumerate() {
+                let st = &mut self.chans[c];
+                let a = s.abs();
+                st.peak = st.peak.max(a);
+                st.sum_sq += (s as f64) * (s as f64);
+                if a >= self.clip_level {
+                    st.clipped += 1;
+                }
+                st.hist.copy_within(1.., 0);
+                st.hist[TP_TAPS - 1] = s;
+                let mut tp = a;
+                for k in &self.kernels {
+                    let v: f32 = st.hist.iter().zip(k).map(|(h, w)| h * w).sum();
+                    tp = tp.max(v.abs());
+                }
+                st.true_peak = st.true_peak.max(tp);
+                let shelved = st.filter[0].run(s as f64);
+                let z = st.filter[1].run(shelved);
+                loud += z * z * self.weights[c];
+                mix += s;
+                if let Some(v) = self.values.get_mut(c + 1) {
+                    *v = s;
+                }
+            }
+            self.values[0] = mix / ch as f32;
+            if let Some(sb) = self.spec.as_mut() {
+                sb.push(self.frame, &self.values);
+            }
+            self.step_energy += loud;
+            self.frame += 1;
+            if self.frame.is_multiple_of(self.step_len) {
+                self.steps.push(self.step_energy / self.step_len as f64);
+                self.step_energy = 0.0;
+            }
+        }
+    }
+
+    pub(crate) fn finish(self, file_size: Option<u64>) -> Result<Quality, ProbeError> {
+        let frame = self.frame;
+        let spec = self
+            .spec
+            .ok_or_else(|| ProbeError::Decode("no audio could be decoded".into()))?;
+        if frame == 0 {
+            return Err(ProbeError::Decode("no audio could be decoded".into()));
+        }
+        if spec.cols == 0 {
+            return Err(ProbeError::Decode("too short to analyse".into()));
+        }
+        let chans = self.chans;
+        let sample_rate = self.sample_rate;
+        let fs = sample_rate as f64;
+
+        let duration_secs = frame as f64 / fs;
+        let per_channel: Vec<ChannelStats> = chans
+            .iter()
+            .map(|c| {
+                let peak_db = to_db(c.peak as f64);
+                let rms_db = to_db((c.sum_sq / frame as f64).sqrt());
+                ChannelStats {
+                    peak_db,
+                    rms_db,
+                    dynamic_range_db: (peak_db - rms_db).max(0.0),
+                    clipped: c.clipped,
+                }
+            })
+            .collect();
+        let peak = chans.iter().map(|c| c.peak).fold(0.0, f32::max) as f64;
+        let true_peak = chans.iter().map(|c| c.true_peak).fold(0.0, f32::max) as f64;
+        let total_sq: f64 = chans.iter().map(|c| c.sum_sq).sum();
+        let rms_db = to_db((total_sq / (frame as f64 * chans.len() as f64)).sqrt());
+        let peak_db = to_db(peak);
+
+        Ok(Quality {
+            sample_rate,
+            channels: chans.len(),
+            duration_secs,
+            bitrate_bps: file_size.map(|s| s as f64 * 8.0 / duration_secs),
+            peak_db,
+            true_peak_dbtp: to_db(true_peak),
+            rms_db,
+            dynamic_range_db: (peak_db - rms_db).max(0.0),
+            lufs: integrated_lufs(&self.steps),
+            clipped: chans.iter().map(|c| c.clipped).sum(),
+            per_channel,
+            spectrogram: Spectrogram {
+                sample_rate,
+                cols: spec.cols,
+                rows: SPEC_ROWS,
+                duration_secs,
+                layers: spec.layers,
+            },
+        })
+    }
+}
+
+/// Like [`analyze_quality`], but uses ffmpeg when Symphonia cannot decode the
+/// file (or when `header_only` says the codec is known to be unsupported).
+pub fn analyze_quality_with(
+    path: &Path,
+    ffmpeg: Option<&crate::ffmpeg::Toolchain>,
+    header_only: bool,
+) -> Result<Quality, ProbeError> {
+    let Some(tc) = ffmpeg else {
+        return analyze_quality(path);
+    };
+    if header_only {
+        return crate::ffmpeg::analyze_quality_ffmpeg(tc, path);
+    }
+    analyze_quality(path).or_else(|_| crate::ffmpeg::analyze_quality_ffmpeg(tc, path))
+}
+
 /// Decode the whole file and measure its levels, loudness and spectrogram.
 ///
 /// A decoder panic on a damaged file is reported as an error.
@@ -268,25 +463,9 @@ fn analyze_quality_inner(path: &Path) -> Result<Quality, ProbeError> {
     let declared_bits = params
         .bits_per_sample
         .or(params.bits_per_coded_sample)
-        .unwrap_or(16)
-        .clamp(8, 24);
-    let clip_level = (1.0 - 2f64.powi(1 - declared_bits as i32)) as f32;
-    let hop = params
-        .n_frames
-        .map(|n| (n / SPEC_TARGET_COLS).max(SPEC_WIN as u64))
-        .unwrap_or(8192);
-
-    let fs = sample_rate as f64;
-    let step_len = (sample_rate / 10).max(1) as u64;
-    let kernels = true_peak_kernels();
-
-    let mut chans: Vec<ChannelState> = Vec::new();
-    let mut spec: Option<SpecBuilder> = None;
+        .unwrap_or(16);
+    let mut meter = Meter::new(sample_rate, declared_bits, params.n_frames);
     let mut sbuf: Option<SampleBuffer<f32>> = None;
-    let mut frame: u64 = 0;
-    let mut step_energy = 0.0f64;
-    let mut steps: Vec<f64> = Vec::new();
-    let mut values: Vec<f32> = Vec::new();
 
     // Stops at the end of the stream (or on an unrecoverable read error).
     while let Ok(packet) = format.next_packet() {
@@ -300,24 +479,6 @@ fn analyze_quality_inner(path: &Path) -> Result<Quality, ProbeError> {
         };
         let sp = *buf.spec();
         let ch = sp.channels.count().max(1);
-        if chans.is_empty() {
-            chans = (0..ch)
-                .map(|_| ChannelState {
-                    peak: 0.0,
-                    true_peak: 0.0,
-                    sum_sq: 0.0,
-                    clipped: 0,
-                    hist: [0.0; TP_TAPS],
-                    filter: k_weighting(fs),
-                })
-                .collect();
-            let layers = if ch > 1 { 1 + ch.min(MAX_LAYERS) } else { 1 };
-            spec = Some(SpecBuilder::new(layers, hop));
-            values = vec![0.0; layers];
-        }
-        if ch != chans.len() {
-            continue; // channel layout changed mid-stream: ignore the odd packet
-        }
         if sbuf
             .as_ref()
             .is_none_or(|s| s.capacity() < buf.capacity() * ch)
@@ -326,95 +487,9 @@ fn analyze_quality_inner(path: &Path) -> Result<Quality, ProbeError> {
         }
         let sb = sbuf.as_mut().unwrap();
         sb.copy_interleaved_ref(buf);
-
-        for fr in sb.samples().chunks_exact(ch) {
-            let mut mix = 0.0f32;
-            let mut loud = 0.0f64;
-            for (c, &s) in fr.iter().enumerate() {
-                let st = &mut chans[c];
-                let a = s.abs();
-                st.peak = st.peak.max(a);
-                st.sum_sq += (s as f64) * (s as f64);
-                if a >= clip_level {
-                    st.clipped += 1;
-                }
-                st.hist.copy_within(1.., 0);
-                st.hist[TP_TAPS - 1] = s;
-                let mut tp = a;
-                for k in &kernels {
-                    let v: f32 = st.hist.iter().zip(k).map(|(h, w)| h * w).sum();
-                    tp = tp.max(v.abs());
-                }
-                st.true_peak = st.true_peak.max(tp);
-                let shelved = st.filter[0].run(s as f64);
-                let z = st.filter[1].run(shelved);
-                loud += z * z;
-                mix += s;
-                if let Some(v) = values.get_mut(c + 1) {
-                    *v = s;
-                }
-            }
-            values[0] = mix / ch as f32;
-            if let Some(sb) = spec.as_mut() {
-                sb.push(frame, &values);
-            }
-            step_energy += loud;
-            frame += 1;
-            if frame.is_multiple_of(step_len) {
-                steps.push(step_energy / step_len as f64);
-                step_energy = 0.0;
-            }
-        }
+        meter.push(sb.samples(), ch);
     }
-
-    let spec = spec.ok_or_else(|| ProbeError::Decode("no audio could be decoded".into()))?;
-    if frame == 0 {
-        return Err(ProbeError::Decode("no audio could be decoded".into()));
-    }
-    if spec.cols == 0 {
-        return Err(ProbeError::Decode("too short to analyse".into()));
-    }
-
-    let duration_secs = frame as f64 / fs;
-    let per_channel: Vec<ChannelStats> = chans
-        .iter()
-        .map(|c| {
-            let peak_db = to_db(c.peak as f64);
-            let rms_db = to_db((c.sum_sq / frame as f64).sqrt());
-            ChannelStats {
-                peak_db,
-                rms_db,
-                dynamic_range_db: (peak_db - rms_db).max(0.0),
-                clipped: c.clipped,
-            }
-        })
-        .collect();
-    let peak = chans.iter().map(|c| c.peak).fold(0.0, f32::max) as f64;
-    let true_peak = chans.iter().map(|c| c.true_peak).fold(0.0, f32::max) as f64;
-    let total_sq: f64 = chans.iter().map(|c| c.sum_sq).sum();
-    let rms_db = to_db((total_sq / (frame as f64 * chans.len() as f64)).sqrt());
-    let peak_db = to_db(peak);
-
-    Ok(Quality {
-        sample_rate,
-        channels: chans.len(),
-        duration_secs,
-        bitrate_bps: size.map(|s| s as f64 * 8.0 / duration_secs),
-        peak_db,
-        true_peak_dbtp: to_db(true_peak),
-        rms_db,
-        dynamic_range_db: (peak_db - rms_db).max(0.0),
-        lufs: integrated_lufs(&steps),
-        clipped: chans.iter().map(|c| c.clipped).sum(),
-        per_channel,
-        spectrogram: Spectrogram {
-            sample_rate,
-            cols: spec.cols,
-            rows: SPEC_ROWS,
-            duration_secs,
-            layers: spec.layers,
-        },
-    })
+    meter.finish(size)
 }
 
 #[cfg(test)]
@@ -504,5 +579,40 @@ mod tests {
         let q = run("fc_q_silence.wav", 44_100, &vec![0.0; 44_100 * 2]);
         assert!(q.lufs.is_none());
         assert!(q.peak_db <= -100.0);
+    }
+
+    #[test]
+    fn surround_weights_follow_bs1770() {
+        assert_eq!(loudness_weights(2), vec![1.0, 1.0]);
+        let w = loudness_weights(6);
+        assert_eq!(w[3], 0.0, "LFE is excluded");
+        assert!((w[4] - 1.41).abs() < 1e-9 && (w[5] - 1.41).abs() < 1e-9);
+        assert_eq!(loudness_weights(8).len(), 8);
+        assert_eq!(loudness_weights(3), vec![1.0; 3]);
+    }
+
+    #[test]
+    fn meter_matches_file_analysis() {
+        let sig = sine(44_100, 3.0, 997.0, 0.5);
+        let mut m = Meter::new(44_100, 16, None);
+        m.push(&sig, 1);
+        let q = m.finish(None).unwrap();
+        assert!((q.peak_db + 6.02).abs() < 0.1, "{}", q.peak_db);
+        assert!((q.rms_db + 9.03).abs() < 0.1, "{}", q.rms_db);
+    }
+
+    #[test]
+    fn lfe_only_signal_has_no_loudness() {
+        // Energy only in the LFE channel of a 5.1 frame must not count.
+        let n = 48_000 * 3;
+        let mut data = vec![0.0f32; n * 6];
+        for i in 0..n {
+            data[i * 6 + 3] = 0.5 * (std::f32::consts::TAU * 60.0 * i as f32 / 48_000.0).sin();
+        }
+        let mut m = Meter::new(48_000, 24, None);
+        m.push(&data, 6);
+        let q = m.finish(None).unwrap();
+        assert!(q.lufs.is_none(), "{:?}", q.lufs);
+        assert_eq!(q.channels, 6);
     }
 }

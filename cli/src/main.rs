@@ -2,8 +2,8 @@ use clap::Parser;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use truelossless_core::{
-    analyze_quality, check_many, csv_line, find_audio_files, CheckOptions, FileReport, Status,
-    CSV_HEADER,
+    analyze_quality_with, check_many, csv_line, find_audio_files, locate_ffmpeg, CheckOptions,
+    FileReport, Status, Toolchain, CSV_HEADER,
 };
 
 /// Check whether audio files are really lossless / hi-res.
@@ -37,6 +37,11 @@ struct Args {
     #[arg(short, long)]
     quality: bool,
 
+    /// ffmpeg executable or folder, used for formats this tool cannot decode
+    /// itself (also read from TRUELOSSLESS_FFMPEG, then searched for).
+    #[arg(long, value_name = "PATH")]
+    ffmpeg: Option<PathBuf>,
+
     /// Also write the full results to this CSV file.
     #[arg(long, value_name = "FILE")]
     csv: Option<PathBuf>,
@@ -48,6 +53,27 @@ fn main() -> ExitCode {
     if files.is_empty() {
         eprintln!("No audio files found under {}", args.path.display());
         return ExitCode::from(1);
+    }
+
+    // An explicit --ffmpeg that does not work is an error; otherwise ffmpeg is
+    // optional and its absence only limits what can be decoded.
+    let ffmpeg: Option<Toolchain> = match locate_ffmpeg(args.ffmpeg.as_deref()) {
+        Ok(t) => Some(t),
+        Err(e) if args.ffmpeg.is_some() => {
+            eprintln!("error: {e}");
+            return ExitCode::from(1);
+        }
+        Err(_) => None,
+    };
+    if args.quality {
+        match &ffmpeg {
+            Some(t) => eprintln!(
+                "ffmpeg {} ({}) will decode formats not supported natively.",
+                t.version,
+                t.source.label()
+            ),
+            None => eprintln!("ffmpeg not found: levels are limited to natively decoded formats."),
+        }
     }
 
     let opts = CheckOptions {
@@ -74,8 +100,8 @@ fn main() -> ExitCode {
                 counts[r.verdict.status as usize] += 1;
                 bad |= matches!(r.verdict.status, Status::Fake | Status::Corrupt);
                 print_report(&name, r);
-                if args.quality && r.info.header_only.is_none() {
-                    print_quality(path);
+                if args.quality {
+                    print_quality(path, ffmpeg.as_ref(), r.info.header_only.is_some());
                 }
                 if args.all || r.verdict.status != Status::Genuine {
                     for reason in &r.verdict.reasons {
@@ -154,8 +180,12 @@ fn print_report(name: &str, r: &FileReport) {
     );
 }
 
-fn print_quality(path: &std::path::Path) {
-    match analyze_quality(path) {
+fn print_quality(path: &std::path::Path, ffmpeg: Option<&Toolchain>, header_only: bool) {
+    if header_only && ffmpeg.is_none() {
+        println!("          levels: needs ffmpeg for this format (use --ffmpeg PATH)");
+        return;
+    }
+    match analyze_quality_with(path, ffmpeg, header_only) {
         Ok(q) => println!(
             "          levels: peak {:.1} dB, true peak {:.1} dBTP, RMS {:.1} dB, DR {:.1} dB, {} LUFS, {} clipped",
             q.peak_db,

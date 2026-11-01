@@ -9,6 +9,9 @@
 //! 3. the folder of this program, or its `ffmpeg/` subfolder,
 //! 4. the directories listed in `PATH` (absolute entries only).
 
+use crate::probe::ProbeError;
+use crate::quality::{Meter, Quality};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
@@ -185,6 +188,177 @@ fn parse_version(text: &str) -> Option<String> {
     Some(v.to_string())
 }
 
+// ---------------------------------------------------------------------------
+// Decoding through ffmpeg
+// ---------------------------------------------------------------------------
+
+/// Longest stream we will decode (hours of audio), to bound memory and time.
+const MAX_HOURS: u64 = 4;
+/// Bytes read from ffmpeg per call.
+const READ_CHUNK: usize = 256 * 1024;
+
+/// What ffmpeg reports about the first audio stream.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StreamInfo {
+    pub sample_rate: u32,
+    pub channels: usize,
+    pub duration_secs: Option<f64>,
+}
+
+fn abs_path(path: &Path) -> PathBuf {
+    // An absolute path never starts with '-', so it cannot be read as an option.
+    std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// Ask ffmpeg to describe `path` (its banner goes to stderr).
+pub fn probe_stream(tc: &Toolchain, path: &Path) -> Result<StreamInfo, ProbeError> {
+    let out = Command::new(&tc.ffmpeg)
+        .args([
+            "-hide_banner",
+            "-nostdin",
+            "-protocol_whitelist",
+            "file",
+            "-i",
+        ])
+        .arg(abs_path(path))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .output()
+        .map_err(ProbeError::Io)?;
+    parse_banner(&String::from_utf8_lossy(&out.stderr))
+        .ok_or_else(|| ProbeError::Decode("ffmpeg found no audio stream".into()))
+}
+
+/// Pull the rate, channel count and duration out of ffmpeg's banner text.
+pub fn parse_banner(text: &str) -> Option<StreamInfo> {
+    let line = text
+        .lines()
+        .find(|l| l.contains("Stream #") && l.contains(" Audio:"))?;
+    let after = &line[line.find(" Audio:")? + 7..];
+    let fields: Vec<&str> = after.split(',').map(str::trim).collect();
+    let sample_rate = fields.iter().find_map(|f| {
+        f.strip_suffix(" Hz")
+            .and_then(|n| n.trim().parse::<u32>().ok())
+    })?;
+    let channels = fields.iter().find_map(|f| parse_layout(f))?;
+    let duration_secs = text.lines().find_map(|l| {
+        let rest = l.trim().strip_prefix("Duration:")?;
+        parse_hms(rest.split(',').next()?.trim())
+    });
+    Some(StreamInfo {
+        sample_rate,
+        channels,
+        duration_secs,
+    })
+}
+
+/// "mono", "stereo", "5.1(side)", "7.1", "6 channels" -> channel count.
+fn parse_layout(f: &str) -> Option<usize> {
+    let f = f.split('(').next()?.trim();
+    match f {
+        "mono" => return Some(1),
+        "stereo" => return Some(2),
+        "quad" => return Some(4),
+        "hexagonal" => return Some(6),
+        "octagonal" => return Some(8),
+        _ => {}
+    }
+    if let Some(n) = f.strip_suffix(" channels") {
+        return n.trim().parse().ok().filter(|&c| c > 0);
+    }
+    // "5.1", "7.1.4", "2.1": sum the dot-separated parts.
+    if f.chars().all(|c| c.is_ascii_digit() || c == '.') && f.contains('.') {
+        let total: usize = f
+            .split('.')
+            .map(|p| p.parse::<usize>().ok())
+            .sum::<Option<usize>>()?;
+        return (total > 0).then_some(total);
+    }
+    None
+}
+
+/// "00:04:19.50" -> seconds.
+fn parse_hms(t: &str) -> Option<f64> {
+    let mut it = t.split(':');
+    let h: f64 = it.next()?.parse().ok()?;
+    let m: f64 = it.next()?.parse().ok()?;
+    let s: f64 = it.next()?.parse().ok()?;
+    Some(h * 3600.0 + m * 60.0 + s)
+}
+
+/// Move whole frames from `bytes` (little-endian f32) into the meter and keep
+/// any partial frame for the next call.
+fn feed(meter: &mut Meter, bytes: &mut Vec<u8>, ch: usize) {
+    let frame_bytes = ch * 4;
+    let usable = bytes.len() / frame_bytes * frame_bytes;
+    if usable == 0 {
+        return;
+    }
+    let samples: Vec<f32> = bytes[..usable]
+        .chunks_exact(4)
+        .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        .collect();
+    meter.push(&samples, ch);
+    bytes.drain(..usable);
+}
+
+/// Levels, loudness and spectrogram for a file Symphonia cannot decode.
+///
+/// ffmpeg decodes the first audio stream to 32-bit float PCM in its native
+/// channel order. For Dolby Atmos this is the 5.1/7.1 bed only.
+pub fn analyze_quality_ffmpeg(tc: &Toolchain, path: &Path) -> Result<Quality, ProbeError> {
+    let info = probe_stream(tc, path)?;
+    let size = std::fs::metadata(path).map(|m| m.len()).ok();
+    let n_frames = info
+        .duration_secs
+        .map(|d| (d * info.sample_rate as f64) as u64);
+    let mut meter = Meter::new(info.sample_rate, 24, n_frames);
+    let max_frames = info.sample_rate as u64 * 3600 * MAX_HOURS;
+
+    let mut child = Command::new(&tc.ffmpeg)
+        .args([
+            "-hide_banner",
+            "-nostdin",
+            "-v",
+            "error",
+            "-protocol_whitelist",
+            "file",
+            "-i",
+        ])
+        .arg(abs_path(path))
+        .args(["-map", "0:a:0", "-vn", "-sn", "-dn", "-f", "f32le", "-"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(ProbeError::Io)?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| ProbeError::Decode("could not read ffmpeg output".into()))?;
+
+    let mut buf = vec![0u8; READ_CHUNK];
+    let mut pending: Vec<u8> = Vec::new();
+    loop {
+        match stdout.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                pending.extend_from_slice(&buf[..n]);
+                feed(&mut meter, &mut pending, info.channels);
+                if meter.frames() >= max_frames {
+                    break;
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(_) => break,
+        }
+    }
+    // Stop ffmpeg if it is still running (cap reached), then reap it.
+    let _ = child.kill();
+    let _ = child.wait();
+    meter.finish(size)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -246,5 +420,55 @@ mod tests {
         let r = locate(Some(&dir));
         assert!(matches!(r, Err(FfmpegError::Broken(..))), "{r:?}");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    const BANNER: &str = "Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'x.m4a':\n  Duration: 00:04:19.04, start: 0.000000, bitrate: 768 kb/s\n  Stream #0:0[0x1](und): Audio: eac3 (ec-3 / 0x332D6365), 48000 Hz, 5.1(side), fltp, 768 kb/s (default)\n";
+
+    #[test]
+    fn parses_atmos_banner() {
+        let i = parse_banner(BANNER).unwrap();
+        assert_eq!(i.sample_rate, 48_000);
+        assert_eq!(i.channels, 6);
+        assert!((i.duration_secs.unwrap() - 259.04).abs() < 1e-6);
+    }
+
+    #[test]
+    fn parses_other_layouts() {
+        for (layout, n) in [
+            ("mono", 1),
+            ("stereo", 2),
+            ("7.1", 8),
+            ("5.1", 6),
+            ("7.1.4", 12),
+            ("2.1", 3),
+            ("quad", 4),
+            ("10 channels", 10),
+        ] {
+            assert_eq!(parse_layout(layout), Some(n), "{layout}");
+        }
+        assert_eq!(parse_layout("fltp"), None);
+        assert_eq!(parse_layout("0 channels"), None);
+    }
+
+    #[test]
+    fn banner_without_audio_is_none() {
+        assert!(parse_banner("Stream #0:0: Video: h264, 1920x1080\n").is_none());
+        assert!(parse_banner("").is_none());
+    }
+
+    #[test]
+    fn feed_keeps_partial_frames() {
+        let mut m = Meter::new(48_000, 24, None);
+        // Two stereo frames, delivered as 10 bytes then the remaining 6.
+        let vals = [0.5f32, -0.5, 0.25, -0.25];
+        let bytes: Vec<u8> = vals.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let mut pending = bytes[..10].to_vec();
+        feed(&mut m, &mut pending, 2);
+        assert_eq!(m.frames(), 1);
+        assert_eq!(pending.len(), 2);
+        pending.extend_from_slice(&bytes[10..]);
+        feed(&mut m, &mut pending, 2);
+        assert_eq!(m.frames(), 2);
+        assert!(pending.is_empty());
     }
 }
