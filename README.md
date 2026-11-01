@@ -30,9 +30,17 @@ cargo run --release -p flac-checker -- path/to/music
 flac-checker path/to/music --verify      # also verify FLAC MD5 (slow)
 flac-checker path/to/music --probe-only  # headers only (fast)
 flac-checker path/to/music --all         # show reasons for genuine files too
+flac-checker path/to/music --csv out.csv # write a CSV report
 ```
 
-GUI: `cargo run --release -p flac-checker-gui`, or drop a folder onto the window.
+GUI: `cargo run --release -p flac-checker-gui [path]`, or drop a folder onto the window.
+The GUI can also export the results to CSV (spreadsheet-safe: formula-like fields are escaped).
+
+Demo files for every verdict (synthetic noise, test-only):
+
+```
+cargo run -p flac-checker-core --features testgen --example gen_samples -- samples
+```
 
 Exit code is `2` if any file is fake, corrupt or unreadable.
 
@@ -42,7 +50,7 @@ Exit code is `2` if any file is fake, corrupt or unreadable.
 - [x] Milestone 2: decode + spectrum, cutoff detection
 - [x] Milestone 3: verdict engine (fake lossless, fake hi-res, bit depth, MD5)
 - [x] Milestone 4: egui GUI (folder picker, drag-drop, list + spectrum + details)
-- [ ] Milestone 5: CSV export, drag-and-drop, release build
+- [x] Milestone 5: CSV export, modern GUI style, sample generator, release build
 
 ## Known limits
 

@@ -110,18 +110,36 @@ pub fn outcome_color(o: Outcome) -> Color32 {
     }
 }
 
-/// Fixed-width tag for the list (text as well as colour, so it does not rely
-/// on colour alone).
-pub fn outcome_tag(o: Outcome) -> &'static str {
+/// Text for the status chip (text as well as colour, so it does not rely on
+/// colour alone).
+pub fn outcome_label(o: Outcome) -> &'static str {
     match o {
-        Outcome::Pending => "...    ",
-        Outcome::Error => "ERROR  ",
+        Outcome::Pending => "CHECKING",
+        Outcome::Error => "ERROR",
         Outcome::Done(Status::Genuine) => "GENUINE",
-        Outcome::Done(Status::Lossy) => "LOSSY  ",
+        Outcome::Done(Status::Lossy) => "LOSSY",
         Outcome::Done(Status::Suspect) => "SUSPECT",
         Outcome::Done(Status::Corrupt) => "CORRUPT",
-        Outcome::Done(Status::Fake) => "FAKE   ",
-        Outcome::Done(Status::Unchecked) => "UNCHKD ",
+        Outcome::Done(Status::Fake) => "FAKE",
+        Outcome::Done(Status::Unchecked) => "UNCHECKED",
+    }
+}
+
+/// "44.1 kHz" / "96 kHz".
+pub fn fmt_rate(hz: u32) -> String {
+    if hz % 1000 == 0 {
+        format!("{} kHz", hz / 1000)
+    } else {
+        format!("{:.1} kHz", hz as f32 / 1000.0)
+    }
+}
+
+pub fn fmt_duration(secs: f64) -> String {
+    let s = secs as u64;
+    if s >= 3600 {
+        format!("{}:{:02}:{:02}", s / 3600, s % 3600 / 60, s % 60)
+    } else {
+        format!("{}:{:02}", s / 60, s % 60)
     }
 }
 
@@ -152,6 +170,14 @@ mod tests {
     #[test]
     fn all_filter_shows_pending_rows_too() {
         assert!(Filter::All.matches(Outcome::Pending));
+    }
+
+    #[test]
+    fn formats_rates_and_durations() {
+        assert_eq!(fmt_rate(44_100), "44.1 kHz");
+        assert_eq!(fmt_rate(96_000), "96 kHz");
+        assert_eq!(fmt_duration(65.0), "1:05");
+        assert_eq!(fmt_duration(3725.0), "1:02:05");
     }
 
     #[test]
