@@ -196,6 +196,11 @@ window and the archive names always agree. Tags must look like `v1.2.3` (or
   available for the tests.
 - Dynamic range is peak minus RMS (crest factor), not the DR-meter (TT DR) value.
   Loudness is BS.1770 integrated LUFS with equal weight on every channel.
+- Header-only formats: Dolby Atmos / E-AC-3 / AC-3 / AC-4, DTS, TrueHD, WavPack,
+  Monkey's Audio, TTA, DSD, Musepack, WMA, Opus and Matroska audio are named from
+  their headers but not decoded. Lossy ones report LOSSY. Lossless ones report
+  UNCHECKED, because authenticity cannot be tested. Levels and the spectrogram
+  are not available for them.
 - Mono-as-stereo detection is not implemented.
 - No Linux or Windows ARM builds yet.
 

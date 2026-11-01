@@ -8,6 +8,7 @@ use crate::analyze::Analysis;
 use crate::cutoff::Cutoff;
 use crate::flac::{Md5Report, Md5Status};
 use crate::probe::FileInfo;
+use crate::special::CodecKind;
 
 /// Band limits at or below this (Hz) with a sharp edge indicate a lossy source.
 const LOSSY_FAKE_BELOW_HZ: f32 = 17_500.0;
@@ -121,7 +122,7 @@ pub fn evaluate(info: &FileInfo, ev: &Evidence) -> Verdict {
             info.extension.as_str(),
             "flac" | "alac" | "wav" | "aif" | "aiff"
         );
-        if !info.lossless && claims_lossless {
+        if !info.lossless && info.header_only != Some(CodecKind::Unknown) && claims_lossless {
             c.flag(
                 Status::Fake,
                 format!(
@@ -140,6 +141,29 @@ pub fn evaluate(info: &FileInfo, ev: &Evidence) -> Verdict {
                 info.container.name()
             ),
         );
+    }
+    if let Some(kind) = info.header_only {
+        let note = info
+            .note
+            .as_deref()
+            .map(|n| format!(" - {n}"))
+            .unwrap_or_default();
+        let name = info.codec.as_str();
+        match kind {
+            CodecKind::Lossy => c.flag(
+                Status::Lossy,
+                format!("{name}{note}: lossy by design, audio not decoded"),
+            ),
+            CodecKind::Lossless => c.flag(
+                Status::Unchecked,
+                format!("{name}{note}: lossless codec, but this tool cannot decode it, so authenticity was not checked"),
+            ),
+            CodecKind::Unknown => c.flag(
+                Status::Unchecked,
+                format!("{name}{note}: codec not decoded, authenticity not checked"),
+            ),
+        }
+        return finish(c);
     }
     if !info.lossless {
         c.flag(
@@ -316,6 +340,8 @@ mod tests {
             duration_secs: Some(100.0),
             extension_mismatch: crate::probe::Container::from_extension(ext) != container
                 && Container::from_extension(ext) != Container::Unknown,
+            header_only: None,
+            note: None,
         }
     }
 
@@ -473,5 +499,37 @@ mod tests {
     fn low_sample_rate_skips_spectral_test() {
         let v = evaluate(&flac(22_050, 16), &ev(9_000.0, 60.0, 16, 16));
         assert_ne!(v.status, Status::Fake);
+    }
+    fn header_only(codec: &str, kind: CodecKind, ext: &str) -> FileInfo {
+        let mut i = info(
+            ext,
+            Container::from_extension(ext),
+            codec,
+            kind == CodecKind::Lossless,
+            48_000,
+            0,
+        );
+        i.header_only = Some(kind);
+        i.note = Some("Dolby Atmos (JOC, complexity 16)".into());
+        i
+    }
+
+    #[test]
+    fn undecodable_lossy_is_lossy_not_corrupt() {
+        let v = evaluate(
+            &header_only("E-AC-3", CodecKind::Lossy, "ec3"),
+            &Evidence::default(),
+        );
+        assert_eq!(v.status, Status::Lossy);
+        assert!(v.reasons[0].contains("Atmos"), "{v:?}");
+    }
+
+    #[test]
+    fn undecodable_lossless_is_unchecked() {
+        let v = evaluate(
+            &header_only("TrueHD", CodecKind::Lossless, "thd"),
+            &Evidence::default(),
+        );
+        assert_eq!(v.status, Status::Unchecked);
     }
 }

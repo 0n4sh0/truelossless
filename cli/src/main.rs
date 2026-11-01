@@ -58,8 +58,8 @@ fn main() -> ExitCode {
     let results = check_many(&files, opts);
 
     println!(
-        "{:<9} {:<38} {:<5} {:>9} {:>4} {:>6} {:>8}",
-        "STATUS", "FILE", "CODEC", "RATE", "BITS", "DUR", "BANDW"
+        "{:<9} {:<38} {:<5} {:>9} {:>4} {:>3} {:>6} {:>8}",
+        "STATUS", "FILE", "CODEC", "RATE", "BITS", "CH", "DUR", "BANDW"
     );
 
     let mut counts = [0usize; 6];
@@ -74,7 +74,7 @@ fn main() -> ExitCode {
                 counts[r.verdict.status as usize] += 1;
                 bad |= matches!(r.verdict.status, Status::Fake | Status::Corrupt);
                 print_report(&name, r);
-                if args.quality {
+                if args.quality && r.info.header_only.is_none() {
                     print_quality(path);
                 }
                 if args.all || r.verdict.status != Status::Genuine {
@@ -135,12 +135,13 @@ fn main() -> ExitCode {
 fn print_report(name: &str, r: &FileReport) {
     let i = &r.info;
     println!(
-        "{:<9} {:<38} {:<5} {:>9} {:>4} {:>6} {:>8}",
+        "{:<9} {:<38} {:<5} {:>9} {:>4} {:>3} {:>6} {:>8}",
         r.verdict.status.label(),
         name,
         i.codec,
         i.sample_rate.map_or("-".into(), |r| format!("{r} Hz")),
         i.bits_per_sample.map_or("-".into(), |b| b.to_string()),
+        i.channels.map_or("-".into(), |c| c.to_string()),
         i.duration_secs.map_or("-".into(), |d| format!(
             "{}:{:02}",
             d as u64 / 60,

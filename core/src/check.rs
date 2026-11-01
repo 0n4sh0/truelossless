@@ -45,7 +45,7 @@ fn check_file_inner(path: &Path, opts: CheckOptions) -> Result<FileReport, Probe
     let info = probe_file(path)?;
 
     // Lossy files are judged on their codec alone; skip the expensive work.
-    let analysable = info.lossless;
+    let analysable = info.lossless && info.header_only.is_none();
 
     let (analysis, analysis_error) = if opts.analyze && analysable {
         match analyze_file(path) {
