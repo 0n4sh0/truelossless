@@ -4,6 +4,9 @@
 
 [![CI](https://github.com/0n4sh0/truelossless/actions/workflows/ci.yml/badge.svg)](https://github.com/0n4sh0/truelossless/actions/workflows/ci.yml)
 
+[![Release](https://img.shields.io/github/v/release/0n4sh0/truelossless)](https://github.com/0n4sh0/truelossless/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 A small, fast tool that tells you whether your "lossless" and "hi-res" audio
 files are the real thing. It scans folders and flags lossy transcodes saved as
 FLAC, 44.1/48 kHz audio upsampled to 96/192 kHz, 16-bit audio padded into 24-bit
@@ -169,12 +172,21 @@ Run the tests with `cargo test --workspace`.
   git push origin v0.1.0
   ```
 
+## Versions
+
+The Git tag is the version. Pushing a tag such as `v0.2.0` builds the release
+and stamps `0.2.0` into every program, so `truelossless --version`, the About
+window and the archive names always agree. Tags must look like `v1.2.3` (or
+`v1.2.3-rc.1` for a pre-release) and must be on `main`. See
+[CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Contributing and security
 
 - Pull requests must pass `fmt`, `clippy` and the tests on Linux, Windows and macOS.
 - Report vulnerabilities privately, see [SECURITY.md](SECURITY.md).
 - The repository rules are in `.github/rulesets/` (import them under
   Settings, Rules, Rulesets).
+- Contributions are welcome, see [CONTRIBUTING.md](CONTRIBUTING.md).
 - Licensed under the [MIT License](LICENSE).
 
 ## Known limits
@@ -186,3 +198,21 @@ Run the tests with `cargo test --workspace`.
   Loudness is BS.1770 integrated LUFS with equal weight on every channel.
 - Mono-as-stereo detection is not implemented.
 - No Linux or Windows ARM builds yet.
+
+## Credits
+
+TrueLossless was created by **[n4sh](https://github.com/0n4sh0)**.
+Source code: <https://github.com/0n4sh0/truelossless>.
+
+Built with these open source projects. Thank you to their authors:
+
+- [Symphonia](https://github.com/pdeljanov/Symphonia) (MPL-2.0) for decoding
+- [egui and eframe](https://github.com/emilk/egui) (MIT or Apache-2.0) for the desktop app
+- [RealFFT](https://github.com/HEnquist/realfft) (MIT) for the spectrum analysis
+- [rayon](https://github.com/rayon-rs/rayon), [clap](https://github.com/clap-rs/clap),
+  [walkdir](https://github.com/BurntSushi/walkdir), [rfd](https://github.com/PolyMeilex/rfd),
+  [md-5](https://github.com/RustCrypto/hashes) and [thiserror](https://github.com/dtolnay/thiserror)
+- [UPX](https://upx.github.io/) for the portable builds
+
+Symphonia is under the MPL-2.0. Its source is public at the link above, and
+TrueLossless does not modify it. The loudness measurement follows ITU-R BS.1770 / EBU R128.

@@ -1,0 +1,35 @@
+name: Bug report
+description: Something crashes, hangs or behaves wrongly
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Shown in the About window, or by `truelossless --version`.
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options: [Windows, Linux, macOS (Apple silicon), macOS (Intel)]
+    validations:
+      required: true
+  - type: dropdown
+    id: app
+    attributes:
+      label: Program
+      options: [Desktop app, Command line, Both]
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce

@@ -54,6 +54,8 @@ Verdicts are heuristics tuned on synthetic signals so far. Treat `SUSPECT` as a
 reason to look closer, not as proof. Please report wrong verdicts as issues,
 and include the file's codec, sample rate and spectrogram if you can.
 
+Created by [n4sh](https://github.com/0n4sh0). Source and issues: https://github.com/0n4sh0/truelossless
+
 Report security problems privately, see
 [SECURITY.md](https://github.com/0n4sh0/truelossless/blob/main/SECURITY.md).
 
