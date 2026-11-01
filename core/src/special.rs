@@ -31,6 +31,7 @@ pub struct Special {
     pub sample_rate: Option<u32>,
     pub channels: Option<usize>,
     pub bits: Option<u32>,
+    pub duration_secs: Option<f64>,
     /// Extra detail, e.g. "Dolby Atmos (JOC)" or "5.1".
     pub note: Option<String>,
 }
@@ -44,6 +45,7 @@ impl Special {
             sample_rate: None,
             channels: None,
             bits: None,
+            duration_secs: None,
             note: None,
         }
     }
@@ -159,6 +161,10 @@ fn dsf(b: &[u8]) -> Special {
         s.channels = Some(u32_at(52) as usize);
         s.sample_rate = Some(u32_at(56));
         s.bits = Some(1);
+        if b.len() >= 72 && s.sample_rate.is_some_and(|r| r > 0) {
+            let frames = u64::from_le_bytes(b[64..72].try_into().unwrap());
+            s.duration_secs = Some(frames as f64 / s.sample_rate.unwrap() as f64);
+        }
     }
     s
 }
@@ -221,11 +227,139 @@ fn mp4_special(f: &mut File, len: u64) -> std::io::Result<Option<Special>> {
             let mut buf = vec![0u8; body as usize];
             f.seek(SeekFrom::Start(pos + header))?;
             f.read_exact(&mut buf)?;
-            return Ok(mp4_sample_entry(&buf));
+            let mut sp = mp4_sample_entry(&buf);
+            if let Some(s) = sp.as_mut() {
+                s.duration_secs = mp4_duration(&buf);
+                if s.duration_secs.is_none() {
+                    s.duration_secs = fragment_duration(f, pos + size, len, &buf, s.sample_rate)?;
+                }
+            }
+            return Ok(sp);
         }
         pos = pos.saturating_add(size);
     }
     Ok(None)
+}
+
+/// Duration from `mvhd`, or from `mehd` for fragmented files where `mvhd`
+/// stores 0.
+pub fn mp4_duration(moov: &[u8]) -> Option<f64> {
+    let at = moov.windows(4).position(|w| w == b"mvhd")? + 4;
+    let p = moov.get(at..)?;
+    let (timescale, dur) = match *p.first()? {
+        0 => (
+            u32::from_be_bytes(p.get(12..16)?.try_into().ok()?),
+            u32::from_be_bytes(p.get(16..20)?.try_into().ok()?) as u64,
+        ),
+        1 => (
+            u32::from_be_bytes(p.get(20..24)?.try_into().ok()?),
+            u64::from_be_bytes(p.get(24..32)?.try_into().ok()?),
+        ),
+        _ => return None,
+    };
+    if timescale == 0 {
+        return None;
+    }
+    let mut dur = dur;
+    if dur == 0 {
+        if let Some(m) = moov.windows(4).position(|w| w == b"mehd") {
+            let q = moov.get(m + 4..)?;
+            dur = match *q.first()? {
+                0 => u32::from_be_bytes(q.get(4..8)?.try_into().ok()?) as u64,
+                _ => u64::from_be_bytes(q.get(4..12)?.try_into().ok()?),
+            };
+        }
+    }
+    (dur > 0).then(|| dur as f64 / timescale as f64)
+}
+
+/// Duration of a fragmented file with no total stored: add up the sample
+/// counts in every `moof/trun`, times the default sample duration in `trex`.
+fn fragment_duration(
+    f: &mut File,
+    mut pos: u64,
+    len: u64,
+    moov: &[u8],
+    media_rate: Option<u32>,
+) -> std::io::Result<Option<f64>> {
+    let Some(rate) = media_rate else {
+        return Ok(None);
+    };
+    // trex: version/flags(4) track_id(4) desc_index(4) default_sample_duration(4)
+    let trex_unit = moov
+        .windows(4)
+        .position(|w| w == b"trex")
+        .and_then(|t| moov.get(t + 16..t + 20))
+        .map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as u64)
+        .unwrap_or(0);
+    let mut ticks = 0u64;
+    let mut unit = trex_unit;
+    while pos + 8 <= len {
+        let mut h = [0u8; 8];
+        f.seek(SeekFrom::Start(pos))?;
+        f.read_exact(&mut h)?;
+        let size = u32::from_be_bytes([h[0], h[1], h[2], h[3]]) as u64;
+        if size < 8 {
+            break;
+        }
+        if &h[4..8] == b"moof" && size <= MAX_MOOV {
+            let mut body = vec![0u8; (size - 8) as usize];
+            f.read_exact(&mut body)?;
+            // A fragment without its own default reuses the previous one.
+            unit = tfhd_duration(&body).unwrap_or(unit);
+            if unit == 0 {
+                return Ok(None);
+            }
+            let mut from = 0;
+            while let Some(i) = body[from..].windows(4).position(|w| w == b"trun") {
+                let at = from + i + 4;
+                let Some(b) = body.get(at..at + 8) else { break };
+                let flags = u32::from_be_bytes([0, b[1], b[2], b[3]]);
+                let count = u32::from_be_bytes([b[4], b[5], b[6], b[7]]) as usize;
+                if flags & 0x100 == 0 {
+                    ticks += count as u64 * unit;
+                } else {
+                    // Per-sample table: walk it and add the stored durations.
+                    let mut o = at + 8;
+                    if flags & 0x1 != 0 {
+                        o += 4;
+                    }
+                    if flags & 0x4 != 0 {
+                        o += 4;
+                    }
+                    let stride = 4 * (flags & 0xF00).count_ones() as usize;
+                    for i in 0..count {
+                        let Some(d) = body.get(o + i * stride..o + i * stride + 4) else {
+                            return Ok(None);
+                        };
+                        ticks += u32::from_be_bytes([d[0], d[1], d[2], d[3]]) as u64;
+                    }
+                }
+                from = at + 8;
+            }
+        }
+        pos += size;
+    }
+    Ok((ticks > 0).then(|| ticks as f64 / rate as f64))
+}
+
+/// `default_sample_duration` from a `tfhd` box, when present.
+fn tfhd_duration(moof: &[u8]) -> Option<u64> {
+    let at = moof.windows(4).position(|w| w == b"tfhd")? + 4;
+    let p = moof.get(at..)?;
+    let flags = u32::from_be_bytes([0, *p.get(1)?, *p.get(2)?, *p.get(3)?]);
+    if flags & 0x8 == 0 {
+        return None;
+    }
+    let mut o = 8; // version/flags + track_id
+    if flags & 0x1 != 0 {
+        o += 8;
+    }
+    if flags & 0x2 != 0 {
+        o += 4;
+    }
+    let b = p.get(o..o + 4)?;
+    Some(u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as u64).filter(|&u| u > 0)
 }
 
 /// Find the audio sample entry inside `moov`. Only codecs Symphonia cannot
@@ -482,6 +616,24 @@ mod tests {
         let plain = dec3(&dec3_box(false)).unwrap();
         assert!(!plain.joc);
         assert!(plain.describe().contains("Digital Plus"));
+    }
+
+    #[test]
+    fn reads_mvhd_and_mehd_duration() {
+        // v0 mvhd: ver/flags, ctime, mtime, timescale 1000, duration 183500.
+        let mut m = b"mvhd    ".to_vec();
+        m.extend_from_slice(&[0; 8]);
+        m.extend_from_slice(&1000u32.to_be_bytes());
+        m.extend_from_slice(&183_500u32.to_be_bytes());
+        assert_eq!(mp4_duration(&m), Some(183.5));
+        // Fragmented: mvhd duration 0, mehd carries it.
+        let mut f = b"mvhd    ".to_vec();
+        f.extend_from_slice(&[0; 8]);
+        f.extend_from_slice(&1000u32.to_be_bytes());
+        f.extend_from_slice(&0u32.to_be_bytes());
+        f.extend_from_slice(b"mehd    ");
+        f.extend_from_slice(&90_000u32.to_be_bytes());
+        assert_eq!(mp4_duration(&f), Some(90.0));
     }
 
     #[test]

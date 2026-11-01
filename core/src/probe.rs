@@ -207,7 +207,7 @@ pub fn probe_file(path: &Path) -> Result<FileInfo, ProbeError> {
             sample_rate: sp.sample_rate,
             bits_per_sample: sp.bits,
             channels: sp.channels,
-            duration_secs: None,
+            duration_secs: sp.duration_secs,
             extension_mismatch,
             header_only: Some(sp.kind),
             note: sp.note,
