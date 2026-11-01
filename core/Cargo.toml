@@ -9,4 +9,5 @@ description = "Audio file probing and authenticity analysis"
 symphonia = { version = "0.5", default-features = false, features = ["flac", "alac", "isomp4", "wav", "aiff", "mp3", "aac", "ogg", "vorbis", "pcm"] }
 walkdir = "2"
 rayon = "1"
+realfft = "3"
 thiserror = "2"
