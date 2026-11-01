@@ -1,0 +1,10 @@
+[package]
+name = "flac-checker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Command-line audio authenticity checker"
+
+[dependencies]
+flac-checker-core = { path = "../core" }
+clap = { version = "4", features = ["derive"] }
