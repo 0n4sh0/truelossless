@@ -6,6 +6,7 @@ pub mod check;
 pub mod csv;
 pub mod cutoff;
 pub mod decode;
+pub mod ffmpeg;
 pub mod flac;
 pub mod probe;
 pub mod quality;
