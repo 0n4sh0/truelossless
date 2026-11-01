@@ -6,6 +6,7 @@
 mod model;
 mod plot;
 mod quality_view;
+mod settings;
 mod style;
 mod worker;
 
@@ -13,14 +14,17 @@ use eframe::egui::{
     self, Align, Align2, Color32, CornerRadius, FontId, Layout, Margin, RichText, Sense,
 };
 use model::{
-    fmt_duration, fmt_rate, outcome_color, outcome_label, status_color, Counts, Filter, Outcome,
-    Slot,
+    bit_depth_text, fmt_duration, fmt_rate, outcome_color, outcome_label, row_summary,
+    status_color, Counts, Filter, Outcome, Slot,
 };
 use quality_view::QualityStore;
+use settings::{FfmpegState, Settings};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
-use style::{alpha, card, chip, tile, tinted_card, ACCENT, BG, PANEL, TEXT_DIM};
-use truelossless_core::{csv_line, CheckOptions, FileReport, Md5Status, Status, CSV_HEADER};
+use style::{alpha, card, chip_right, tile, tinted_card, ACCENT, BG, PANEL, TEXT_DIM};
+use truelossless_core::{
+    csv_line, CheckOptions, DecoderMode, FileReport, Md5Status, Status, CSV_HEADER,
+};
 use worker::{start_scan, Msg, ScanHandle};
 
 fn main() -> eframe::Result {
@@ -42,10 +46,16 @@ fn main() -> eframe::Result {
         options,
         Box::new(move |cc| {
             style::apply(&cc.egui_ctx);
-            Ok(Box::new(App {
+            let settings = Settings::load();
+            let ffmpeg = settings.resolve();
+            let mut app = App {
                 pending_open: initial,
+                settings,
+                ffmpeg,
                 ..App::default()
-            }))
+            };
+            app.apply_backend();
+            Ok(Box::new(app))
         }),
     )
 }
@@ -64,11 +74,20 @@ struct App {
     notice: Option<(String, Instant)>,
     quality: QualityStore,
     about_open: bool,
+    settings_open: bool,
+    settings: Settings,
+    ffmpeg: FfmpegState,
 }
 
 impl App {
     fn filter(&self) -> Filter {
         self.filter.unwrap_or(Filter::All)
+    }
+
+    /// Tell the quality worker about the current ffmpeg and decoder choice.
+    fn apply_backend(&mut self) {
+        self.quality
+            .set_backend(self.ffmpeg.toolchain(), self.settings.mode);
     }
 
     fn scanning(&self) -> bool {
@@ -301,6 +320,9 @@ impl App {
                 if ui.small_button("About").clicked() {
                     self.about_open = true;
                 }
+                if ui.small_button("Settings").clicked() {
+                    self.settings_open = true;
+                }
                 ui.label(RichText::new(concat!("v", env!("CARGO_PKG_VERSION"))).color(TEXT_DIM));
                 if let Some((msg, _)) = &self.notice {
                     ui.label(RichText::new(msg).color(TEXT_DIM));
@@ -338,6 +360,139 @@ impl App {
                 );
             });
         self.about_open = open;
+    }
+
+    fn settings_window(&mut self, ctx: &egui::Context) {
+        enum Act {
+            PickFile,
+            PickFolder,
+            Clear,
+            Recheck,
+        }
+        let mut open = self.settings_open;
+        let mut act: Option<Act> = None;
+        let mut mode_changed = false;
+        egui::Window::new("Settings")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.label(RichText::new("ffmpeg").strong());
+                ui.label(
+                    RichText::new(
+                        "Used for formats TrueLossless cannot decode itself (Dolby Atmos, DTS, \
+                         TrueHD and more), and as a fallback when the built-in decoder fails.",
+                    )
+                    .small()
+                    .color(TEXT_DIM),
+                );
+                ui.add_space(4.0);
+                match &self.ffmpeg {
+                    FfmpegState::Found(t) => {
+                        ui.label(
+                            RichText::new(format!(
+                                "●  ffmpeg {} found ({})",
+                                t.version,
+                                t.source.label()
+                            ))
+                            .color(status_color(Status::Genuine)),
+                        );
+                        ui.label(RichText::new(t.ffmpeg.display().to_string()).small());
+                        let probe = match &t.ffprobe {
+                            Some(p) => format!("ffprobe: {}", p.display()),
+                            None => "ffprobe: not found (needed later for tags and cover art)"
+                                .to_string(),
+                        };
+                        ui.label(RichText::new(probe).small().color(TEXT_DIM));
+                    }
+                    FfmpegState::Missing => {
+                        ui.label(
+                            RichText::new(
+                                "●  Not found. Looked in the chosen path, TRUELOSSLESS_FFMPEG, \
+                                 next to the program and PATH.",
+                            )
+                            .color(status_color(Status::Suspect)),
+                        );
+                    }
+                    FfmpegState::Broken(e) => {
+                        ui.label(
+                            RichText::new(format!("●  {e}")).color(status_color(Status::Fake)),
+                        );
+                    }
+                }
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Choose file…").clicked() {
+                        act = Some(Act::PickFile);
+                    }
+                    if ui.button("Choose folder…").clicked() {
+                        act = Some(Act::PickFolder);
+                    }
+                    if ui
+                        .add_enabled(
+                            self.settings.ffmpeg_path.is_some(),
+                            egui::Button::new("Clear choice"),
+                        )
+                        .clicked()
+                    {
+                        act = Some(Act::Clear);
+                    }
+                    if ui.button("Check again").clicked() {
+                        act = Some(Act::Recheck);
+                    }
+                });
+                ui.add_space(8.0);
+                ui.separator();
+                ui.add_space(4.0);
+                ui.label(RichText::new("Decoder for levels and spectrogram").strong());
+                for (m, label) in [
+                    (
+                        DecoderMode::Auto,
+                        "Automatic: built-in first, ffmpeg if it fails",
+                    ),
+                    (DecoderMode::Native, "Built-in only"),
+                    (DecoderMode::Ffmpeg, "ffmpeg only"),
+                ] {
+                    if ui.radio_value(&mut self.settings.mode, m, label).changed() {
+                        mode_changed = true;
+                    }
+                }
+            });
+        self.settings_open = open;
+
+        let mut changed = mode_changed;
+        match act {
+            Some(Act::PickFile) => {
+                if let Some(p) = rfd::FileDialog::new()
+                    .set_title("Choose ffmpeg")
+                    .pick_file()
+                {
+                    self.settings.ffmpeg_path = Some(p);
+                    changed = true;
+                }
+            }
+            Some(Act::PickFolder) => {
+                if let Some(p) = rfd::FileDialog::new()
+                    .set_title("Choose the folder that contains ffmpeg")
+                    .pick_folder()
+                {
+                    self.settings.ffmpeg_path = Some(p);
+                    changed = true;
+                }
+            }
+            Some(Act::Clear) => {
+                self.settings.ffmpeg_path = None;
+                changed = true;
+            }
+            Some(Act::Recheck) => changed = true,
+            None => {}
+        }
+        if changed {
+            self.ffmpeg = self.settings.resolve();
+            self.apply_backend();
+            self.settings.save();
+        }
     }
 
     fn file_list(&mut self, ui: &mut egui::Ui) {
@@ -391,69 +546,52 @@ impl App {
                     }
 
                     let cy = rect.center().y;
-                    let chip_w = chip(
+                    let left = rect.left() + 12.0;
+                    // Verdict chip on the right, vertically centred.
+                    let chip_w = chip_right(
                         painter,
-                        egui::pos2(rect.left() + 10.0, cy),
+                        egui::pos2(rect.right() - 10.0, cy - 8.0),
                         outcome_label(o),
                         outcome_color(o),
                     );
-                    let text_x = rect.left() + 10.0 + chip_w + 12.0;
-
-                    // Right-aligned format summary.
-                    let mut meta_left = rect.right() - 10.0;
-                    if let Some(Ok(r)) = &slot.result {
-                        let meta = [
-                            r.info.sample_rate.map(fmt_rate),
-                            r.info.bits_per_sample.map(|b| format!("{b}-bit")),
-                        ]
-                        .into_iter()
-                        .flatten()
-                        .collect::<Vec<_>>()
-                        .join(" · ");
-                        let g = painter.layout_no_wrap(meta, FontId::proportional(11.5), TEXT_DIM);
-                        meta_left = rect.right() - 10.0 - g.size().x;
-                        painter.galley(egui::pos2(meta_left, cy - g.size().y / 2.0), g, TEXT_DIM);
-                    }
-
+                    let text_right = (rect.right() - 10.0 - chip_w - 10.0).max(left);
                     let clip = egui::Rect::from_min_max(
-                        egui::pos2(text_x, rect.top()),
-                        egui::pos2((meta_left - 10.0).max(text_x), rect.bottom()),
+                        egui::pos2(left, rect.top()),
+                        egui::pos2(text_right, rect.bottom()),
                     );
                     let p = painter.with_clip_rect(clip);
-                    let path = Path::new(&slot.name);
-                    let file = path
+                    // The second line can use the full row width.
+                    let full = egui::Rect::from_min_max(
+                        egui::pos2(left, rect.top()),
+                        egui::pos2(rect.right() - 8.0, rect.bottom()),
+                    );
+                    let p2 = painter.with_clip_rect(full);
+                    let file = Path::new(&slot.name)
                         .file_name()
                         .map(|n| n.to_string_lossy().into_owned())
                         .unwrap_or_else(|| slot.name.clone());
-                    let dir = path
-                        .parent()
-                        .map(|d| d.display().to_string())
-                        .filter(|d| !d.is_empty());
-                    let text_color = ui.visuals().text_color();
-                    if let Some(dir) = dir {
-                        p.text(
-                            egui::pos2(text_x, cy - 8.0),
-                            Align2::LEFT_CENTER,
-                            file,
-                            FontId::proportional(14.0),
-                            text_color,
-                        );
-                        p.text(
-                            egui::pos2(text_x, cy + 9.0),
-                            Align2::LEFT_CENTER,
-                            dir,
-                            FontId::proportional(11.0),
-                            TEXT_DIM,
-                        );
-                    } else {
-                        p.text(
-                            egui::pos2(text_x, cy),
-                            Align2::LEFT_CENTER,
-                            file,
-                            FontId::proportional(14.0),
-                            text_color,
-                        );
-                    }
+                    let summary = match &slot.result {
+                        Some(Ok(r)) => row_summary(&r.info),
+                        Some(Err(_)) => "could not be read".to_string(),
+                        None => String::new(),
+                    };
+                    // Line 1: file name. Line 2: format details.
+                    p.text(
+                        egui::pos2(left, cy - 8.0),
+                        Align2::LEFT_CENTER,
+                        file,
+                        FontId::proportional(14.0),
+                        ui.visuals().text_color(),
+                    );
+                    p2.text(
+                        egui::pos2(left, cy + 9.0),
+                        Align2::LEFT_CENTER,
+                        summary,
+                        FontId::proportional(10.5),
+                        TEXT_DIM,
+                    );
+                    // The folder is no longer drawn in the row; show it on hover.
+                    resp.on_hover_text(slot.name.clone());
                 }
             });
     }
@@ -577,7 +715,7 @@ fn report_view(ui: &mut egui::Ui, slot: &Slot, r: &FileReport, quality: &mut Qua
                         (Some(b), Some(e)) if e != b => format!("{b}-bit ({e} used)"),
                         (Some(b), _) => format!("{b}-bit"),
                         (None, Some(e)) => format!("{e}-bit used"),
-                        (None, None) => "-".into(),
+                        (None, None) => bit_depth_text(i),
                     },
                 );
                 if let Some(a) = &r.analysis {
@@ -729,6 +867,7 @@ impl eframe::App for App {
             .show(ui, |ui| self.details(ui));
 
         self.about_window(&ctx);
+        self.settings_window(&ctx);
         drop_overlay(&ctx);
     }
 }

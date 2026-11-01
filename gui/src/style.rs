@@ -119,6 +119,26 @@ pub fn tile(ui: &mut Ui, label: &str, value: &str) {
         });
 }
 
+/// Like [`chip`], but anchored by its right edge; returns its width.
+pub fn chip_right(
+    painter: &egui::Painter,
+    right_center: egui::Pos2,
+    text: &str,
+    color: Color32,
+) -> f32 {
+    let w = painter
+        .layout_no_wrap(text.to_string(), FontId::proportional(10.5), color)
+        .size()
+        .x
+        + 16.0;
+    chip(
+        painter,
+        egui::pos2(right_center.x - w, right_center.y),
+        text,
+        color,
+    )
+}
+
 /// Rounded status pill with centred text; returns its width.
 pub fn chip(painter: &egui::Painter, left_center: egui::Pos2, text: &str, color: Color32) -> f32 {
     let font = FontId::proportional(10.5);

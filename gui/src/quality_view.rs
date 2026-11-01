@@ -11,7 +11,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use truelossless_core::quality::SPEC_DB_MIN;
-use truelossless_core::{analyze_quality, FileReport, Quality};
+use truelossless_core::{
+    analyze_quality_with, DecoderMode, FileReport, Quality, QualityOptions, Toolchain,
+};
 
 const AMBER: Color32 = Color32::from_rgb(245, 180, 50);
 const KEEP: usize = 8;
@@ -32,6 +34,8 @@ pub struct QualityStore {
     map: HashMap<PathBuf, QEntry>,
     order: Vec<PathBuf>,
     running: Option<PathBuf>,
+    ffmpeg: Option<Toolchain>,
+    mode: DecoderMode,
     tx: Sender<(PathBuf, Result<Quality, String>)>,
     rx: Receiver<(PathBuf, Result<Quality, String>)>,
 }
@@ -43,6 +47,8 @@ impl Default for QualityStore {
             map: HashMap::new(),
             order: Vec::new(),
             running: None,
+            ffmpeg: None,
+            mode: DecoderMode::Auto,
             tx,
             rx,
         }
@@ -74,15 +80,39 @@ impl QualityStore {
         }
     }
 
+    /// Change the decoder setup. Earlier results may differ, so drop them.
+    pub fn set_backend(&mut self, ffmpeg: Option<Toolchain>, mode: DecoderMode) {
+        self.ffmpeg = ffmpeg;
+        self.mode = mode;
+        self.clear();
+    }
+
+    /// True when a format the built-in decoders lack can be measured.
+    fn can_decode_unsupported(&self) -> bool {
+        self.ffmpeg.is_some() && self.mode != DecoderMode::Native
+    }
+
     /// Start analysing `path` if it is not known and nothing else is running.
-    pub fn ensure(&mut self, path: &Path, ctx: &egui::Context) {
+    pub fn ensure(
+        &mut self,
+        path: &Path,
+        ctx: &egui::Context,
+        header_only: bool,
+        hint: Option<f64>,
+    ) {
         if self.map.contains_key(path) || self.running.is_some() {
             return;
         }
         self.running = Some(path.to_path_buf());
         let (tx, ctx, p) = (self.tx.clone(), ctx.clone(), path.to_path_buf());
+        let ffmpeg = self.ffmpeg.clone();
+        let opts = QualityOptions {
+            mode: self.mode,
+            header_only,
+            duration_hint: hint,
+        };
         std::thread::spawn(move || {
-            let res = analyze_quality(&p).map_err(|e| e.to_string());
+            let res = analyze_quality_with(&p, ffmpeg.as_ref(), opts).map_err(|e| e.to_string());
             let _ = tx.send((p, res));
             ctx.request_repaint();
         });
@@ -96,17 +126,25 @@ impl QualityStore {
 
 /// Draw the quality card and the spectrogram for `path`.
 pub fn show(ui: &mut egui::Ui, store: &mut QualityStore, path: &Path, r: &FileReport) {
-    if r.info.header_only.is_some() {
+    let header_only = r.info.header_only.is_some();
+    if header_only && !store.can_decode_unsupported() {
+        let why = if store.mode == DecoderMode::Native {
+            "The decoder is set to built-in only, which cannot read this format. Change it in Settings."
+        } else {
+            "This format needs ffmpeg for levels and a spectrogram. Choose ffmpeg in Settings."
+        };
         card().show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.label(
-                RichText::new("Levels and spectrogram are not available: this codec is identified from its header only.")
+                RichText::new("AUDIO QUALITY ANALYSIS")
+                    .small()
                     .color(TEXT_DIM),
             );
+            ui.label(RichText::new(why).color(TEXT_DIM));
         });
         return;
     }
-    store.ensure(path, ui.ctx());
+    store.ensure(path, ui.ctx(), header_only, r.info.duration_secs);
     let Some(entry) = store.map.get_mut(path) else {
         card().show(ui, |ui| {
             ui.set_width(ui.available_width());
@@ -154,7 +192,7 @@ fn stats_card(ui: &mut egui::Ui, q: &Quality, r: &FileReport) {
         );
         ui.add_space(6.0);
         let i = &r.info;
-        let stored = i.bits_per_sample.map_or("-".into(), |b| format!("{b}-bit"));
+        let stored = crate::model::bit_depth_text(i);
         let layout = match q.channels {
             1 => "1 (mono)".to_string(),
             2 => "2 (stereo)".to_string(),
@@ -229,6 +267,13 @@ fn stats_card(ui: &mut egui::Ui, q: &Quality, r: &FileReport) {
             ),
         ]);
         grid(ui, "q_levels", &rows);
+
+        let mut note = format!("Decoded with {}", q.decoder.name());
+        if r.info.note.as_deref().is_some_and(|n| n.contains("Atmos")) {
+            note.push_str(" · 5.1/7.1 bed only, Atmos objects are not included");
+        }
+        ui.add_space(4.0);
+        ui.label(RichText::new(note).small().color(TEXT_DIM));
 
         if q.per_channel.len() > 1 {
             ui.add_space(4.0);

@@ -1,6 +1,6 @@
 use eframe::egui::Color32;
 use std::path::PathBuf;
-use truelossless_core::{FileReport, Status};
+use truelossless_core::{FileInfo, FileReport, Status};
 
 /// One row in the file list. `result` is `None` until the file is checked.
 pub struct Slot {
@@ -139,6 +139,39 @@ pub fn fmt_rate(hz: u32) -> String {
     }
 }
 
+/// "24-bit", "n/a" for lossy codecs (they have no fixed bit depth), or "-".
+pub fn bit_depth_text(info: &FileInfo) -> String {
+    match info.bits_per_sample {
+        Some(b) => format!("{b}-bit"),
+        None if !info.lossless => "n/a".into(),
+        None => "-".into(),
+    }
+}
+
+/// Second line of a file-list row, e.g.
+/// "M4A · bit n/a · 48 kHz · 6 ch". The codec and the lossless or lossy
+/// label are left out: the status chip and the details panel carry them.
+pub fn row_summary(info: &FileInfo) -> String {
+    let ext = if info.extension.is_empty() {
+        info.container.name().to_string()
+    } else {
+        info.extension.to_uppercase()
+    };
+    let bits = match info.bits_per_sample {
+        Some(b) => format!("{b}-bit"),
+        None if !info.lossless => "bit n/a".into(),
+        None => "-".into(),
+    };
+    let mut parts = vec![ext, bits];
+    if let Some(sr) = info.sample_rate {
+        parts.push(fmt_rate(sr));
+    }
+    if let Some(ch) = info.channels.filter(|&c| c > 2) {
+        parts.push(format!("{ch} ch"));
+    }
+    parts.join(" \u{b7} ")
+}
+
 pub fn fmt_duration(secs: f64) -> String {
     let s = secs as u64;
     if s >= 3600 {
@@ -201,5 +234,41 @@ mod tests {
         ];
         let c = Counts::of(&slots);
         assert_eq!((c.pending, c.errors), (1, 1));
+    }
+
+    fn info(lossless: bool, bits: Option<u32>, ch: usize) -> FileInfo {
+        FileInfo {
+            path: std::path::PathBuf::from("x.m4a"),
+            size_bytes: 1,
+            extension: "m4a".into(),
+            container: truelossless_core::Container::Mp4,
+            codec: "E-AC-3".into(),
+            lossless,
+            sample_rate: Some(48_000),
+            bits_per_sample: bits,
+            channels: Some(ch),
+            duration_secs: None,
+            extension_mismatch: false,
+            header_only: None,
+            note: None,
+        }
+    }
+
+    #[test]
+    fn atmos_row_says_bit_depth_is_not_applicable() {
+        let i = info(false, None, 6);
+        assert_eq!(bit_depth_text(&i), "n/a");
+        assert_eq!(
+            row_summary(&i),
+            "M4A \u{b7} bit n/a \u{b7} 48 kHz \u{b7} 6 ch"
+        );
+    }
+
+    #[test]
+    fn lossless_row_shows_bits_and_hides_stereo_channels() {
+        let i = info(true, Some(24), 2);
+        assert_eq!(bit_depth_text(&i), "24-bit");
+        assert_eq!(row_summary(&i), "M4A \u{b7} 24-bit \u{b7} 48 kHz");
+        assert_eq!(bit_depth_text(&info(true, None, 2)), "-");
     }
 }
