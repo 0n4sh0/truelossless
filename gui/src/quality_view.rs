@@ -1,11 +1,13 @@
 //! On-demand audio quality analysis: background worker, stats card and a
 //! spectrogram with per-channel tabs.
 
-use crate::model::{fmt_duration, fmt_rate};
-use crate::style::{alpha, card, BG, BORDER, TEXT_DIM};
+use crate::style::{
+    alpha, card, card_title, mono, mono_bold, segmented, stat_tile, Stat, ACCENT, AMBER, BORDER,
+    GREEN, HIGH, LOWEST, TEXT_DIM,
+};
 use eframe::egui::{
-    self, Align2, Color32, ColorImage, CornerRadius, FontId, Pos2, Rect, RichText, Sense, Stroke,
-    TextureHandle, TextureOptions, Vec2,
+    self, Align, Align2, Color32, ColorImage, CornerRadius, FontId, Layout, Pos2, Rect, RichText,
+    Sense, Stroke, TextureHandle, TextureOptions, Vec2,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -16,7 +18,6 @@ use truelossless_core::{
     analyze_quality_with, DecoderMode, FileReport, Quality, QualityOptions, Toolchain,
 };
 
-const AMBER: Color32 = Color32::from_rgb(245, 180, 50);
 const KEEP: usize = 8;
 
 pub struct QView {
@@ -139,8 +140,8 @@ impl QualityStore {
     }
 }
 
-/// Draw the quality card and the spectrogram for `path`.
-pub fn show(ui: &mut egui::Ui, store: &mut QualityStore, path: &Path, r: &FileReport) {
+/// Draw the levels card for `path`, starting the analysis if needed.
+pub fn show_stats(ui: &mut egui::Ui, store: &mut QualityStore, path: &Path, r: &FileReport) {
     let header_only = r.info.header_only.is_some();
     if header_only && !store.can_decode_unsupported() {
         let why = if store.mode == DecoderMode::Native {
@@ -150,17 +151,13 @@ pub fn show(ui: &mut egui::Ui, store: &mut QualityStore, path: &Path, r: &FileRe
         };
         card().show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.label(
-                RichText::new("AUDIO QUALITY ANALYSIS")
-                    .small()
-                    .color(TEXT_DIM),
-            );
+            card_title(ui, "📊", "Dynamics & levels");
             ui.label(RichText::new(why).color(TEXT_DIM));
         });
         return;
     }
     store.ensure(path, ui.ctx(), header_only, r.info.duration_secs);
-    let Some(entry) = store.map.get_mut(path) else {
+    let Some(entry) = store.map.get(path) else {
         card().show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
@@ -174,163 +171,168 @@ pub fn show(ui: &mut egui::Ui, store: &mut QualityStore, path: &Path, r: &FileRe
         QEntry::Failed(e) => {
             card().show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ui.label(
-                    RichText::new("AUDIO QUALITY ANALYSIS")
-                        .small()
-                        .color(TEXT_DIM),
-                );
+                card_title(ui, "📊", "Dynamics & levels");
                 ui.label(RichText::new(format!("Not available: {e}")).color(TEXT_DIM));
             });
         }
-        QEntry::Done(v) => {
-            stats_card(ui, &v.q, r);
-            spectrogram_card(ui, v);
-        }
+        QEntry::Done(v) => stats_card(ui, &v.q, r),
     }
 }
 
-fn db(v: f64) -> String {
+/// Draw the spectrogram for `path` once its analysis is ready.
+pub fn show_spectrogram(ui: &mut egui::Ui, store: &mut QualityStore, path: &Path) {
+    if let Some(QEntry::Done(v)) = store.map.get_mut(path) {
+        spectrogram_card(ui, v);
+    }
+}
+
+/// Split a level into number and unit for a tile, showing silence as -inf.
+fn level(v: f64) -> String {
     if v <= -119.9 {
-        "-inf dB".into()
+        "-inf".into()
     } else {
-        format!("{v:.2} dB")
+        format!("{v:.2}")
     }
 }
 
 fn stats_card(ui: &mut egui::Ui, q: &Quality, r: &FileReport) {
     card().show(ui, |ui| {
         ui.set_width(ui.available_width());
-        ui.label(
-            RichText::new("AUDIO QUALITY ANALYSIS")
-                .small()
-                .color(TEXT_DIM),
-        );
-        ui.add_space(6.0);
-        let i = &r.info;
-        let stored = crate::model::bit_depth_text(i);
-        let layout = match q.channels {
-            1 => "1 (mono)".to_string(),
-            2 => "2 (stereo)".to_string(),
-            n => n.to_string(),
-        };
-        let cutoff = r
-            .analysis
-            .as_ref()
-            .map_or("Not available".to_string(), |a| {
-                if a.cutoff.bandwidth_hz >= q.sample_rate as f32 / 2.0 * 0.98 {
-                    "Not detected".to_string()
-                } else {
-                    format!("{:.1} kHz", a.cutoff.bandwidth_hz / 1000.0)
-                }
+        ui.horizontal(|ui| {
+            card_title(ui, "📊", "Dynamics & levels");
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 5.0;
+                ui.label(mono(format!("Decoded with {}", q.decoder.name()), 10.5).color(TEXT_DIM));
+                ui.label(RichText::new("●").size(8.0).color(GREEN));
             });
-        let mut rows: Vec<(&str, String, Option<Color32>)> = vec![
-            ("Codec", i.codec.clone(), None),
-            ("Sample rate", fmt_rate(q.sample_rate), None),
-            ("Bit depth", stored, None),
-            (
-                "Bitrate",
-                q.bitrate_bps
-                    .map_or("-".into(), |b| format!("{:.2} Mbps", b / 1e6)),
-                None,
-            ),
-            ("Channels", layout, None),
-            ("Duration", fmt_duration(q.duration_secs), None),
-            (
-                "Nyquist",
-                format!("{:.1} kHz", q.sample_rate as f32 / 2000.0),
-                None,
-            ),
-            (
-                "Size",
-                format!("{:.1} MB", i.size_bytes as f64 / 1_048_576.0),
-                None,
-            ),
-        ];
-        grid(ui, "q_basic", &rows);
-        rows.clear();
+        });
         ui.add_space(4.0);
-        ui.separator();
-        ui.add_space(4.0);
-        let clip = (q.clipped > 0).then_some(AMBER);
-        rows.extend([
-            ("Dynamic range", db(q.dynamic_range_db), None),
-            ("Peak", db(q.peak_db), None),
-            ("RMS", db(q.rms_db), None),
-            (
-                "Loudness",
-                q.lufs.map_or("-".into(), |l| format!("{l:.1} LUFS")),
-                None,
+        let tp = q.true_peak_dbtp;
+        let plain = |label, value, unit, note: &str| Stat {
+            label,
+            value,
+            unit,
+            note: note.to_string(),
+            color: None,
+            note_color: TEXT_DIM,
+        };
+        let warn = |on: bool| on.then_some(AMBER);
+        let tiles = [
+            plain(
+                "DYN. RANGE",
+                level(q.dynamic_range_db),
+                "dB",
+                "peak to quiet",
             ),
-            (
-                "True peak",
-                if q.true_peak_dbtp <= -119.9 {
-                    "-inf dBTP".into()
+            plain(
+                "SAMPLE PEAK",
+                level(q.peak_db),
+                "dBFS",
+                &if q.peak_db < 0.0 {
+                    format!("{:.1} dB headroom", -q.peak_db)
                 } else {
-                    format!("{:.2} dBTP", q.true_peak_dbtp)
+                    "at full scale".to_string()
                 },
-                (q.true_peak_dbtp > 0.0).then_some(AMBER),
             ),
-            ("Clipping", q.clipped.to_string(), clip),
-            ("Spectral cutoff", cutoff, None),
-            (
-                "Samples",
-                format!(
-                    "{:.1}M",
-                    q.duration_secs * q.sample_rate as f64 * q.channels as f64 / 1e6
-                ),
-                None,
+            plain("RMS", level(q.rms_db), "dB", "average level"),
+            plain(
+                "LOUDNESS",
+                q.lufs.map_or("-".into(), |l| format!("{l:.1}")),
+                "LUFS",
+                "integrated",
             ),
-        ]);
-        grid(ui, "q_levels", &rows);
-
-        let mut note = format!("Decoded with {}", q.decoder.name());
-        if r.info.note.as_deref().is_some_and(|n| n.contains("Atmos")) {
-            note.push_str(" · 5.1/7.1 bed only, Atmos objects are not included");
-        }
-        ui.add_space(4.0);
-        ui.label(RichText::new(note).small().color(TEXT_DIM));
-
-        if q.per_channel.len() > 1 {
-            ui.add_space(4.0);
-            ui.separator();
-            ui.add_space(4.0);
-            ui.label(RichText::new("Per-channel").small().color(TEXT_DIM));
-            for (n, c) in q.per_channel.iter().enumerate().take(8) {
-                ui.label(
-                    RichText::new(format!(
-                        "Ch {}:  Peak {:.1}  /  RMS {:.1}  /  DR {:.1}  /  Clip {}",
-                        n + 1,
-                        c.peak_db,
-                        c.rms_db,
-                        c.dynamic_range_db,
-                        c.clipped
-                    ))
-                    .monospace()
-                    .size(12.5),
-                );
-            }
-        }
-    });
-}
-
-fn grid(ui: &mut egui::Ui, id: &str, rows: &[(&str, String, Option<Color32>)]) {
-    egui::Grid::new(id)
-        .num_columns(4)
-        .spacing([18.0, 7.0])
-        .min_col_width(70.0)
-        .show(ui, |ui| {
-            for (n, (k, v, color)) in rows.iter().enumerate() {
-                ui.label(RichText::new(*k).color(TEXT_DIM));
-                let mut text = RichText::new(v).strong();
-                if let Some(c) = color {
-                    text = text.color(*c);
-                }
-                ui.label(text);
-                if n % 2 == 1 {
-                    ui.end_row();
-                }
+            Stat {
+                color: warn(tp > 0.0),
+                note_color: warn(tp > 0.0).unwrap_or(TEXT_DIM),
+                ..plain(
+                    "TRUE PEAK",
+                    if tp <= -119.9 {
+                        "-inf".into()
+                    } else {
+                        format!("{tp:+.2}")
+                    },
+                    "dBTP",
+                    if tp > 0.0 {
+                        "inter-sample over"
+                    } else {
+                        "no overs"
+                    },
+                )
+            },
+            Stat {
+                color: warn(q.clipped > 0),
+                note_color: warn(q.clipped > 0).unwrap_or(TEXT_DIM),
+                ..plain(
+                    "CLIPPING",
+                    q.clipped.to_string(),
+                    "smp",
+                    if q.clipped > 0 {
+                        "clipped samples"
+                    } else {
+                        "none"
+                    },
+                )
+            },
+        ];
+        ui.columns(tiles.len(), |cols| {
+            for (col, s) in cols.iter_mut().zip(&tiles) {
+                stat_tile(col, s, LOWEST, 13.5);
             }
         });
+
+        if q.per_channel.len() > 1 {
+            ui.add_space(6.0);
+            egui::Frame::new()
+                .fill(alpha(HIGH, 150))
+                .corner_radius(CornerRadius::same(4))
+                .inner_margin(egui::Margin::symmetric(10, 6))
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        let stereo = q.per_channel.len() == 2;
+                        for (n, c) in q.per_channel.iter().enumerate().take(8) {
+                            if n > 0 {
+                                ui.add_space(18.0);
+                            }
+                            let name = match (stereo, n) {
+                                (true, 0) => "Ch 1 (Left):".to_string(),
+                                (true, _) => "Ch 2 (Right):".to_string(),
+                                _ => format!("Ch {}:", n + 1),
+                            };
+                            ui.label(mono_bold(name, 11.5).color(ACCENT));
+                            for (k, v) in [
+                                ("Peak", format!("{:.1} dBFS", c.peak_db)),
+                                ("RMS", format!("{:.1} dB", c.rms_db)),
+                                ("DR", format!("{:.1}", c.dynamic_range_db)),
+                            ] {
+                                ui.label(mono(k, 11.5).color(TEXT_DIM));
+                                ui.label(mono_bold(v, 11.5));
+                            }
+                            ui.label(
+                                mono(format!("Clips: {}", c.clipped), 11.5)
+                                    .color(if c.clipped > 0 { AMBER } else { TEXT_DIM }),
+                            );
+                        }
+                    });
+                });
+        }
+
+        let mut note = Vec::new();
+        if let Some(b) = q.bitrate_bps {
+            note.push(format!("{:.2} Mbps", b / 1e6));
+        }
+        note.push(match q.channels {
+            1 => "mono".to_string(),
+            2 => "stereo".to_string(),
+            n => format!("{n} channels"),
+        });
+        if r.info.note.as_deref().is_some_and(|n| n.contains("Atmos")) {
+            note.push("5.1/7.1 bed only, Atmos objects are not included".into());
+        }
+        ui.add_space(4.0);
+        ui.label(mono(note.join(" · "), 10.5).color(TEXT_DIM));
+    });
 }
 
 /// Black → blue → purple → red → yellow → white.
@@ -387,23 +389,18 @@ fn spectrogram_card(ui: &mut egui::Ui, v: &mut QView) {
     card().show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
-            ui.label(RichText::new("SPECTROGRAM").small().color(TEXT_DIM));
-            ui.add_space(8.0);
-            let n = v.q.spectrogram.layers.len();
-            for l in 0..n {
-                let name = if l == 0 {
-                    if n == 1 {
-                        "Mono".to_string()
-                    } else {
-                        "Mix".to_string()
-                    }
-                } else {
-                    format!("Ch {l}")
-                };
-                if ui.selectable_label(v.layer == l, name).clicked() {
-                    v.layer = l;
-                }
-            }
+            card_title(ui, "▦", "Spectrogram");
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                let n = v.q.spectrogram.layers.len();
+                let names: Vec<String> = (0..n)
+                    .map(|l| match (l, n) {
+                        (0, 1) => "Mono".to_string(),
+                        (0, _) => "Mix".to_string(),
+                        _ => format!("Ch {l}"),
+                    })
+                    .collect();
+                segmented(ui, &names, &mut v.layer);
+            });
         });
         ui.add_space(4.0);
 
@@ -421,7 +418,7 @@ fn spectrogram_card(ui: &mut egui::Ui, v: &mut QView) {
             Pos2::new(full.left() + 44.0, full.top() + 4.0),
             Pos2::new(full.right() - 6.0, full.bottom() - 46.0),
         );
-        painter.rect_filled(area, CornerRadius::same(4), BG);
+        painter.rect_filled(area, CornerRadius::same(4), LOWEST);
         painter.image(
             tex.id(),
             area,
@@ -429,7 +426,7 @@ fn spectrogram_card(ui: &mut egui::Ui, v: &mut QView) {
             Color32::WHITE,
         );
 
-        let font = FontId::proportional(11.0);
+        let font = FontId::monospace(10.5);
         let grid = Stroke::new(1.0, alpha(Color32::WHITE, 28));
         let nyq = s.nyquist();
         let fstep = nice_step(nyq, 6.0, &[1_000.0, 2_000.0, 5_000.0, 10_000.0, 20_000.0]);

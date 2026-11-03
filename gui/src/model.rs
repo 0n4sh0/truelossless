@@ -98,11 +98,11 @@ impl Counts {
 
 pub fn status_color(s: Status) -> Color32 {
     match s {
-        Status::Genuine => Color32::from_rgb(70, 190, 110),
-        Status::Lossy => Color32::from_rgb(120, 150, 200),
-        Status::Suspect => Color32::from_rgb(230, 170, 40),
+        Status::Genuine => Color32::from_rgb(78, 222, 163),
+        Status::Lossy => Color32::from_rgb(134, 147, 152),
+        Status::Suspect => Color32::from_rgb(255, 185, 95),
         Status::Corrupt => Color32::from_rgb(235, 120, 50),
-        Status::Fake => Color32::from_rgb(230, 70, 70),
+        Status::Fake => Color32::from_rgb(255, 120, 110),
         Status::Unchecked => Color32::GRAY,
     }
 }

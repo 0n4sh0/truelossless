@@ -1,13 +1,12 @@
 //! Average-spectrum plot drawn directly with the egui painter.
 
-use crate::style::{alpha, ACCENT, BG, BORDER, TEXT_DIM};
-use eframe::egui::{self, Align2, Color32, CornerRadius, FontId, Pos2, Rect, Sense, Stroke, Vec2};
+use crate::style::{alpha, ACCENT, AMBER, BG, BORDER, LOWEST, TEXT_DIM};
+use eframe::egui::{self, Align2, CornerRadius, FontId, Pos2, Rect, Sense, Stroke, Vec2};
 use truelossless_core::{Cutoff, Spectrum};
 
 const DB_MIN: f32 = -120.0;
 const DB_MAX: f32 = 0.0;
 const HEIGHT: f32 = 270.0;
-const AMBER: Color32 = Color32::from_rgb(245, 180, 50);
 
 fn freq_step(nyquist_hz: f32) -> f32 {
     if nyquist_hz > 60_000.0 {
@@ -37,12 +36,12 @@ pub fn spectrum_plot(ui: &mut egui::Ui, spec: &Spectrum, cut: &Cutoff) {
     let (resp, painter) = ui.allocate_painter(Vec2::new(width, HEIGHT), Sense::hover());
     let full = resp.rect;
     let plot = Rect::from_min_max(
-        Pos2::new(full.left() + 40.0, full.top() + 8.0),
+        Pos2::new(full.left() + 48.0, full.top() + 8.0),
         Pos2::new(full.right() - 10.0, full.bottom() - 24.0),
     );
-    let font = FontId::proportional(11.0);
+    let font = FontId::monospace(10.5);
 
-    painter.rect_filled(plot, CornerRadius::same(6), BG);
+    painter.rect_filled(plot, CornerRadius::same(6), LOWEST);
 
     let nyq = spec.nyquist();
     let x_of = |hz: f32| plot.left() + (hz / nyq).clamp(0.0, 1.0) * plot.width();
@@ -61,7 +60,7 @@ pub fn spectrum_plot(ui: &mut egui::Ui, spec: &Spectrum, cut: &Cutoff) {
         painter.text(
             Pos2::new(plot.left() - 6.0, y),
             Align2::RIGHT_CENTER,
-            format!("{db:.0}"),
+            format!("{db:.0} dB"),
             font.clone(),
             TEXT_DIM,
         );
@@ -79,7 +78,7 @@ pub fn spectrum_plot(ui: &mut egui::Ui, spec: &Spectrum, cut: &Cutoff) {
         painter.text(
             Pos2::new(x, plot.bottom() + 5.0),
             Align2::CENTER_TOP,
-            format!("{:.0}k", hz / 1000.0),
+            format!("{:.0} kHz", hz / 1000.0),
             font.clone(),
             TEXT_DIM,
         );
@@ -98,7 +97,7 @@ pub fn spectrum_plot(ui: &mut egui::Ui, spec: &Spectrum, cut: &Cutoff) {
         })
         .collect();
 
-    let top = alpha(ACCENT, 85);
+    let top = alpha(ACCENT, 60);
     let bottom = alpha(ACCENT, 0);
     let mut mesh = egui::Mesh::default();
     for w in pts.windows(2) {
