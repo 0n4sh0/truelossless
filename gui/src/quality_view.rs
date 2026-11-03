@@ -203,7 +203,7 @@ fn stats_card(ui: &mut egui::Ui, q: &Quality, r: &FileReport) {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 5.0;
                 ui.label(mono(format!("Decoded with {}", q.decoder.name()), 10.5).color(TEXT_DIM));
-                ui.label(RichText::new("●").size(8.0).color(GREEN));
+                crate::style::dot(ui, GREEN);
             });
         });
         ui.add_space(4.0);
@@ -290,6 +290,7 @@ fn stats_card(ui: &mut egui::Ui, q: &Quality, r: &FileReport) {
                     ui.set_width(ui.available_width());
                     ui.horizontal_wrapped(|ui| {
                         ui.spacing_mut().item_spacing.x = 6.0;
+                        ui.spacing_mut().interact_size.y = 0.0;
                         let stereo = q.per_channel.len() == 2;
                         for (n, c) in q.per_channel.iter().enumerate().take(8) {
                             if n > 0 {

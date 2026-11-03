@@ -902,100 +902,121 @@ fn thousands(n: u64) -> String {
     out
 }
 
+/// Caption over a value, right-aligned, for the verdict banner.
+fn right_stat(ui: &mut egui::Ui, label: &str, value: String, color: Color32) {
+    ui.with_layout(Layout::top_down(Align::Max), |ui| {
+        ui.spacing_mut().item_spacing.y = 2.0;
+        ui.add(egui::Label::new(style::caption(label)).extend());
+        ui.add(egui::Label::new(style::mono_bold(value, 16.0).color(color)).extend());
+    });
+}
+
 fn report_view(ui: &mut egui::Ui, slot: &Slot, r: &FileReport, quality: &mut QualityStore) {
     use style::{mono, mono_bold, Stat};
     let color = status_color(r.verdict.status);
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
+            // Keep cards clear of the scroll bar.
+            ui.set_max_width(ui.available_width() - 12.0);
             ui.spacing_mut().item_spacing.y = 10.0;
             let i = &r.info;
             let file = Path::new(&slot.name)
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_else(|| slot.name.clone());
-
-            // Identity: name and path on the left, format tags on the right.
-            ui.horizontal(|ui| {
-                ui.vertical(|ui| {
-                    ui.spacing_mut().item_spacing.y = 2.0;
-                    ui.label(style::heading(file, 22.0));
-                    ui.label(mono(slot.path.display().to_string(), 11.0).color(TEXT_DIM));
-                });
-                ui.with_layout(Layout::right_to_left(Align::TOP), |ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    if i.lossless {
-                        style::badge(ui, "LOSSLESS", GREEN);
-                    } else {
-                        style::badge(ui, "LOSSY", status_color(Status::Lossy));
-                    }
-                    style::badge(ui, &i.codec.to_uppercase(), ACCENT);
-                });
-            });
-
-            // Verdict.
             let used = r.analysis.as_ref().and_then(|a| a.effective_bits);
+
             card().show(ui, |ui| {
                 ui.set_width(ui.available_width());
+                ui.spacing_mut().item_spacing.y = 10.0;
+
+                // Identity: name and path on the left, format tags on the right.
+                egui::Sides::new().show(
+                    ui,
+                    |ui| {
+                        ui.vertical(|ui| {
+                            ui.spacing_mut().item_spacing.y = 2.0;
+                            ui.label(style::heading(file, 22.0));
+                            ui.label(mono(slot.path.display().to_string(), 11.0).color(TEXT_DIM));
+                        });
+                    },
+                    |ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        if i.lossless {
+                            style::badge(ui, "LOSSLESS", GREEN);
+                        } else {
+                            style::badge(ui, "LOSSY", status_color(Status::Lossy));
+                        }
+                        style::badge(ui, &i.codec.to_uppercase(), ACCENT);
+                    },
+                );
+
+                // Verdict banner.
                 egui::Frame::new()
                     .fill(LOWEST)
-                    .corner_radius(CornerRadius::same(6))
+                    .corner_radius(CornerRadius::same(4))
                     .inner_margin(Margin::same(12))
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
-                        ui.horizontal(|ui| {
-                            let (icon, _) =
-                                ui.allocate_exact_size(egui::vec2(44.0, 44.0), Sense::hover());
-                            ui.painter()
-                                .rect_filled(icon, CornerRadius::same(6), alpha(color, 40));
-                            let glyph = match r.verdict.status {
-                                Status::Genuine => "✔",
-                                Status::Lossy | Status::Unchecked => "ℹ",
-                                Status::Suspect => "⚠",
-                                Status::Corrupt | Status::Fake => "✕",
-                            };
-                            ui.painter().text(
-                                icon.center(),
-                                Align2::CENTER_CENTER,
-                                glyph,
-                                FontId::proportional(22.0),
-                                color,
-                            );
-                            ui.add_space(4.0);
-                            ui.vertical(|ui| {
-                                ui.spacing_mut().item_spacing.y = 2.0;
-                                let mut title = r.verdict.status.label().to_uppercase();
-                                if r.verdict.status == Status::Genuine && i.lossless {
-                                    title.push_str(" LOSSLESS");
-                                }
-                                ui.label(style::heading(title, 22.0).color(color));
-                                if let Some(first) = r.verdict.reasons.first() {
-                                    ui.label(RichText::new(first).size(12.5).color(TEXT_DIM));
-                                }
-                            });
-                            if let Some(a) = &r.analysis {
-                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                    ui.spacing_mut().item_spacing.x = 24.0;
-                                    if let (Some(b), Some(e)) = (i.bits_per_sample, used) {
-                                        ui.vertical(|ui| {
-                                            ui.label(style::caption("BIT DEPTH USED"));
-                                            ui.label(
-                                                mono_bold(format!("{e} / {b}"), 15.0).color(
-                                                    if e >= b { GREEN } else { style::AMBER },
-                                                ),
-                                            );
-                                        });
+                        egui::Sides::new().show(
+                            ui,
+                            |ui| {
+                                let (icon, _) =
+                                    ui.allocate_exact_size(egui::vec2(44.0, 44.0), Sense::hover());
+                                ui.painter().rect_filled(
+                                    icon,
+                                    CornerRadius::same(4),
+                                    alpha(color, 40),
+                                );
+                                let glyph = match r.verdict.status {
+                                    Status::Genuine => "✔",
+                                    Status::Lossy | Status::Unchecked => "ℹ",
+                                    Status::Suspect => "⚠",
+                                    Status::Corrupt | Status::Fake => "✕",
+                                };
+                                ui.painter().text(
+                                    icon.center(),
+                                    Align2::CENTER_CENTER,
+                                    glyph,
+                                    FontId::proportional(22.0),
+                                    color,
+                                );
+                                ui.add_space(4.0);
+                                ui.vertical(|ui| {
+                                    ui.spacing_mut().item_spacing.y = 2.0;
+                                    let mut title = r.verdict.status.label().to_uppercase();
+                                    if r.verdict.status == Status::Genuine && i.lossless {
+                                        title.push_str(" LOSSLESS");
                                     }
-                                    ui.vertical(|ui| {
-                                        ui.label(style::caption("CONTENT ENDS"));
-                                        ui.label(mono_bold(
-                                            format!("{} kHz", khz(a.cutoff.bandwidth_hz)),
-                                            15.0,
-                                        ));
-                                    });
+                                    ui.label(style::heading(title, 22.0).color(color));
+                                    if let Some(first) = r.verdict.reasons.first() {
+                                        ui.label(RichText::new(first).size(12.5).color(TEXT_DIM));
+                                    }
                                 });
-                            }
-                        });
+                            },
+                            |ui| {
+                                ui.spacing_mut().item_spacing.x = 28.0;
+                                let Some(a) = &r.analysis else {
+                                    return;
+                                };
+                                if let (Some(b), Some(e)) = (i.bits_per_sample, used) {
+                                    right_stat(
+                                        ui,
+                                        "BIT DEPTH USED",
+                                        format!("{e} / {b}"),
+                                        if e >= b { GREEN } else { style::AMBER },
+                                    );
+                                }
+                                let strong = ui.visuals().strong_text_color();
+                                right_stat(
+                                    ui,
+                                    "CONTENT ENDS",
+                                    format!("{} kHz", khz(a.cutoff.bandwidth_hz)),
+                                    strong,
+                                );
+                            },
+                        );
                     });
 
                 let mut chips: Vec<String> = r.verdict.reasons.iter().skip(1).cloned().collect();
@@ -1003,7 +1024,6 @@ fn report_view(ui: &mut egui::Ui, slot: &Slot, r: &FileReport, quality: &mut Qua
                     chips.push(format!("analysis failed: {e}"));
                 }
                 for row in chips.chunks(3) {
-                    ui.add_space(2.0);
                     ui.columns(3, |c| {
                         for (col, text) in c.iter_mut().zip(row) {
                             style::reason_chip(col, text, color);

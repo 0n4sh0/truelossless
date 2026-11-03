@@ -37,7 +37,7 @@ pub fn spectrum_plot(ui: &mut egui::Ui, spec: &Spectrum, cut: &Cutoff) {
     let full = resp.rect;
     let plot = Rect::from_min_max(
         Pos2::new(full.left() + 48.0, full.top() + 8.0),
-        Pos2::new(full.right() - 10.0, full.bottom() - 24.0),
+        Pos2::new(full.right() - 22.0, full.bottom() - 24.0),
     );
     let font = FontId::monospace(10.5);
 

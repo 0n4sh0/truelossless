@@ -16,6 +16,7 @@ pub const PANEL: Color32 = Color32::from_rgb(22, 27, 40);
 pub const CARD: Color32 = Color32::from_rgb(26, 31, 44);
 pub const HIGH: Color32 = Color32::from_rgb(37, 42, 55);
 pub const BORDER: Color32 = Color32::from_rgb(48, 53, 66);
+pub const TEXT: Color32 = Color32::from_rgb(222, 226, 243);
 pub const TEXT_DIM: Color32 = Color32::from_rgb(160, 172, 178);
 
 const BOLD: &str = "bold";
@@ -99,6 +100,7 @@ fn visuals() -> egui::Visuals {
     }
     v.widgets.noninteractive.bg_fill = CARD;
     v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, BORDER);
+    v.widgets.noninteractive.fg_stroke = Stroke::new(1.0, TEXT);
     v.widgets.inactive.bg_fill = HIGH;
     v.widgets.inactive.weak_bg_fill = HIGH;
     v.widgets.inactive.bg_stroke = Stroke::NONE;
@@ -201,6 +203,7 @@ pub fn stat_tile(ui: &mut Ui, s: &Stat, fill: Color32, size: f32) {
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.spacing_mut().item_spacing.y = 3.0;
+            ui.spacing_mut().interact_size.y = 0.0;
             ui.label(caption(s.label));
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
