@@ -407,7 +407,7 @@ impl App {
             );
         } else if self.quality.background_left() > 0 {
             ui.horizontal(|ui| {
-                ui.spinner();
+                style::dot(ui, ACCENT);
                 ui.label(
                     style::mono(
                         format!(

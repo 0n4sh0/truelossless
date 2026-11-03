@@ -240,36 +240,70 @@ pub fn reason_chip(ui: &mut Ui, text: &str, color: Color32) {
 
 /// Pill row of tabs with one selected; works in either layout direction.
 pub fn segmented(ui: &mut Ui, names: &[String], selected: &mut usize) {
-    let order: Vec<usize> = if ui.layout().prefer_right_to_left() {
-        (0..names.len()).rev().collect()
-    } else {
-        (0..names.len()).collect()
+    const H: f32 = 24.0;
+    const PAD: f32 = 12.0;
+    const INSET: f32 = 3.0;
+    let font = |on: bool| {
+        FontId::new(
+            12.0,
+            if on {
+                mono_bold_family()
+            } else {
+                egui::FontFamily::Monospace
+            },
+        )
     };
-    Frame::new()
-        .fill(LOWEST)
-        .corner_radius(CornerRadius::same(4))
-        .inner_margin(Margin::same(2))
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 2.0;
-                ui.spacing_mut().button_padding = egui::vec2(10.0, 2.0);
-                for i in order {
-                    let on = *selected == i;
-                    let text = if on {
-                        mono_bold(&names[i], 11.5).color(ACCENT_DARK)
-                    } else {
-                        mono(&names[i], 11.5).color(TEXT_DIM)
-                    };
-                    let b = egui::Button::new(text)
-                        .fill(if on { ACCENT } else { Color32::TRANSPARENT })
-                        .frame(on)
-                        .min_size(egui::vec2(0.0, 22.0));
-                    if ui.add(b).clicked() {
-                        *selected = i;
-                    }
-                }
-            });
-        });
+    // Size every segment from its bold label so the width never jumps.
+    let widths: Vec<f32> = names
+        .iter()
+        .map(|n| {
+            ui.painter()
+                .layout_no_wrap(n.clone(), font(true), TEXT)
+                .size()
+                .x
+                + PAD * 2.0
+        })
+        .collect();
+    let total = widths.iter().sum::<f32>() + INSET * 2.0;
+    let (outer, _) =
+        ui.allocate_exact_size(egui::vec2(total, H + INSET * 2.0), egui::Sense::hover());
+    let p = ui.painter();
+    p.rect_filled(outer, CornerRadius::same(4), LOWEST);
+    p.rect_stroke(
+        outer,
+        CornerRadius::same(4),
+        Stroke::new(1.0, BORDER),
+        egui::StrokeKind::Inside,
+    );
+    // Segments always read left to right, whatever the parent layout.
+    let mut x = outer.left() + INSET;
+    for (i, name) in names.iter().enumerate() {
+        let r =
+            egui::Rect::from_min_size(egui::pos2(x, outer.top() + INSET), egui::vec2(widths[i], H));
+        x += widths[i];
+        let resp = ui.interact(r, ui.id().with(("seg", i)), egui::Sense::click());
+        if resp.clicked() {
+            *selected = i;
+        }
+        let on = *selected == i;
+        let p = ui.painter();
+        let color = if on {
+            p.rect_filled(r, CornerRadius::same(3), ACCENT);
+            ACCENT_DARK
+        } else if resp.hovered() {
+            p.rect_filled(r, CornerRadius::same(3), HIGH);
+            TEXT
+        } else {
+            TEXT_DIM
+        };
+        p.text(
+            r.center(),
+            egui::Align2::CENTER_CENTER,
+            name,
+            font(on),
+            color,
+        );
+    }
 }
 
 /// Like [`chip`], but anchored by its right edge; returns its width.
