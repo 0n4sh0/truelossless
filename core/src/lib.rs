@@ -2,6 +2,7 @@
 //! their spectrum.
 
 pub mod analyze;
+pub mod cache;
 pub mod check;
 pub mod csv;
 pub mod cutoff;
@@ -23,8 +24,8 @@ pub use ffmpeg::{locate as locate_ffmpeg, Toolchain};
 pub use flac::{read_streaminfo, verify_md5, Md5Report, Md5Status, StreamInfo};
 pub use probe::{probe_file, probe_many, Container, FileInfo, ProbeError};
 pub use quality::{
-    analyze_quality, analyze_quality_with, ChannelStats, Decoder, DecoderMode, Quality,
-    QualityOptions, Spectrogram,
+    analyze_quality, analyze_quality_cancellable, analyze_quality_with, ChannelStats, Decoder,
+    DecoderMode, Quality, QualityOptions, Spectrogram,
 };
 pub use scan::find_audio_files;
 pub use special::CodecKind;

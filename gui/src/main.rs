@@ -14,18 +14,18 @@ use eframe::egui::{
     self, Align, Align2, Color32, CornerRadius, FontId, Layout, Margin, RichText, Sense,
 };
 use model::{
-    bit_depth_text, fmt_duration, fmt_rate, outcome_color, outcome_label, row_summary,
-    status_color, Counts, Filter, Outcome, Slot,
+    bit_depth_text, fmt_duration, outcome_color, outcome_label, row_summary, status_color, Counts,
+    Filter, Outcome, Slot,
 };
 use quality_view::QualityStore;
 use settings::{FfmpegState, Settings};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
-use style::{alpha, card, chip_right, tile, tinted_card, ACCENT, BG, PANEL, TEXT_DIM};
+use style::{alpha, card, chip_right, tinted_card, ACCENT, BG, GREEN, LOWEST, PANEL, TEXT_DIM};
 use truelossless_core::{
-    csv_line, CheckOptions, DecoderMode, FileReport, Md5Status, Status, CSV_HEADER,
+    csv_line, verdict, CheckOptions, DecoderMode, FileReport, Md5Status, Status, CSV_HEADER,
 };
-use worker::{start_scan, Msg, ScanHandle};
+use worker::{clear_cache, recheck, start_scan, Msg, ScanHandle};
 
 fn main() -> eframe::Result {
     // Optional first argument: a folder or file to scan on start-up.
@@ -33,6 +33,7 @@ fn main() -> eframe::Result {
     let mut viewport = egui::ViewportBuilder::default()
         .with_inner_size([1180.0, 720.0])
         .with_min_inner_size([820.0, 480.0])
+        .with_decorations(false)
         .with_drag_and_drop(true);
     if let Ok(icon) = eframe::icon_data::from_png_bytes(include_bytes!("../../assets/icon.png")) {
         viewport = viewport.with_icon(icon);
@@ -67,9 +68,15 @@ struct App {
     slots: Vec<Slot>,
     done: usize,
     scan: Option<ScanHandle>,
+    /// The scan was stopped, so nothing is measured ahead.
+    stopped: bool,
+    /// Size of the caches on disk, measured when Settings opens.
+    cache_bytes: Option<u64>,
+    rechecks: Vec<std::sync::mpsc::Receiver<(PathBuf, Result<FileReport, String>)>>,
     selected: Option<usize>,
     scroll_to_selected: bool,
     filter: Option<Filter>,
+    search: String,
     verify_md5: bool,
     notice: Option<(String, Instant)>,
     quality: QualityStore,
@@ -103,6 +110,8 @@ impl App {
         self.root = Some(root);
         self.slots.clear();
         self.quality.clear();
+        self.quality.stop_background();
+        self.stopped = false;
         self.selected = None;
         self.done = 0;
     }
@@ -121,7 +130,65 @@ impl App {
         }
     }
 
+    fn check_options(&self) -> CheckOptions {
+        CheckOptions {
+            analyze: true,
+            verify_md5: self.verify_md5,
+        }
+    }
+
+    /// Check one file again from scratch.
+    fn rescan_file(&mut self, i: usize, ctx: &egui::Context) {
+        let Some(slot) = self.slots.get_mut(i) else {
+            return;
+        };
+        slot.result = None;
+        let path = slot.path.clone();
+        self.quality.forget(&path);
+        self.rechecks
+            .push(recheck(path, self.check_options(), ctx.clone()));
+    }
+
+    /// Stop the scan and any measuring ahead.
+    fn stop(&mut self) {
+        if let Some(h) = &self.scan {
+            h.cancel();
+        }
+        self.stopped = true;
+        self.quality.stop_all();
+    }
+
+    /// Queue every checked, lossless file for measuring ahead.
+    fn measure_ahead(&mut self) {
+        let files = self
+            .slots
+            .iter()
+            .filter_map(|s| match &s.result {
+                Some(Ok(r)) if r.info.lossless => Some(quality_view::Pending {
+                    path: s.path.clone(),
+                    header_only: r.info.header_only.is_some(),
+                    hint: r.info.duration_secs,
+                }),
+                _ => None,
+            })
+            .collect();
+        self.quality.queue_background(files);
+    }
+
     fn pump_messages(&mut self) {
+        let mut finished = Vec::new();
+        self.rechecks.retain(|rx| match rx.try_recv() {
+            Ok(done) => {
+                finished.push(done);
+                false
+            }
+            Err(e) => e == std::sync::mpsc::TryRecvError::Empty,
+        });
+        for (path, result) in finished {
+            if let Some(slot) = self.slots.iter_mut().find(|s| s.path == path) {
+                slot.result = Some(result);
+            }
+        }
         let msgs: Vec<Msg> = match &self.scan {
             Some(h) => h.rx.try_iter().collect(),
             None => return,
@@ -146,6 +213,9 @@ impl App {
                 }
                 Msg::Finished => {
                     self.scan = None;
+                    if !self.stopped {
+                        self.measure_ahead();
+                    }
                     if self.selected.is_none() {
                         self.selected = self.first_visible();
                     }
@@ -156,8 +226,12 @@ impl App {
 
     fn visible(&self) -> Vec<usize> {
         let f = self.filter();
+        let q = self.search.trim().to_lowercase();
         (0..self.slots.len())
-            .filter(|&i| f.matches(self.slots[i].outcome()))
+            .filter(|&i| {
+                f.matches(self.slots[i].outcome())
+                    && (q.is_empty() || self.slots[i].name.to_lowercase().contains(&q))
+            })
             .collect()
     }
 
@@ -225,20 +299,84 @@ impl App {
         self.say(msg);
     }
 
+    fn title_bar(&mut self, ui: &mut egui::Ui) {
+        use style::{paint_icon, Icon};
+        let ctx = ui.ctx().clone();
+        let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+        let (rect, drag) = ui.allocate_exact_size(
+            egui::vec2(ui.available_width(), 34.0),
+            Sense::click_and_drag(),
+        );
+        if drag.drag_started() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+        }
+        if drag.double_clicked() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+        }
+        let mut ui = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(rect)
+                .layout(Layout::left_to_right(Align::Center)),
+        );
+        ui.spacing_mut().item_spacing.x = 8.0;
+        ui.add_space(10.0);
+        let (logo, _) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), Sense::hover());
+        style::paint_logo(ui.painter(), logo.center(), ACCENT);
+        ui.label(style::heading("TRUELOSSLESS", 12.5));
+        style::badge(&mut ui, concat!("v", env!("CARGO_PKG_VERSION")), TEXT_DIM);
+        ui.add_space(12.0);
+        let (txt, col) = if self.scanning() {
+            ("Scanning", ACCENT)
+        } else {
+            ("Ready", GREEN)
+        };
+        ui.spacing_mut().item_spacing.x = 4.0;
+        style::dot(&mut ui, col);
+        ui.label(style::mono(txt, 13.0).color(TEXT_DIM));
+
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            let btn = |ui: &mut egui::Ui, icon: Icon, hover: Color32| -> bool {
+                let (r, resp) = ui.allocate_exact_size(egui::vec2(46.0, 34.0), Sense::click());
+                if resp.hovered() {
+                    ui.painter().rect_filled(r, CornerRadius::ZERO, hover);
+                }
+                paint_icon(
+                    ui.painter(),
+                    r.center(),
+                    icon,
+                    Color32::from_rgb(222, 226, 243),
+                );
+                resp.clicked()
+            };
+            if btn(ui, Icon::Close, Color32::from_rgb(196, 43, 28)) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            let max_icon = if maximized {
+                Icon::Restore
+            } else {
+                Icon::Maximize
+            };
+            if btn(ui, max_icon, style::HIGH) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+            }
+            if btn(ui, Icon::Minimize, style::HIGH) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+            }
+        });
+    }
+
     fn top_bar(&mut self, ui: &mut egui::Ui) {
+        use style::{icon_button, Icon};
         let ctx = ui.ctx().clone();
         ui.horizontal(|ui| {
-            ui.label(RichText::new("TrueLossless").size(18.0).strong());
-            ui.add_space(10.0);
-
-            let open =
-                egui::Button::new(RichText::new("Open folder").color(BG).strong()).fill(ACCENT);
-            if ui.add(open).clicked() {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            if icon_button(ui, Icon::Folder, "Open folder", true, true).clicked() {
                 if let Some(dir) = rfd::FileDialog::new().pick_folder() {
                     self.start(dir, &ctx);
                 }
             }
-            if ui.button("Open file").clicked() {
+            if icon_button(ui, Icon::File, "Open file", false, true).clicked() {
                 if let Some(file) = rfd::FileDialog::new()
                     .add_filter("Audio", truelossless_core::scan::AUDIO_EXTENSIONS)
                     .pick_file()
@@ -246,51 +384,59 @@ impl App {
                     self.start(file, &ctx);
                 }
             }
-            ui.checkbox(&mut self.verify_md5, "Verify FLAC MD5")
+            let md5 = icon_button(ui, Icon::Check, "Verify FLAC MD5", self.verify_md5, true)
                 .on_hover_text("Fully decodes each FLAC file to prove the audio is intact. Slow.");
-
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let has_results = self.slots.iter().any(|s| s.result.is_some());
-                if ui
-                    .add_enabled(has_results, egui::Button::new("Export CSV"))
-                    .clicked()
-                {
-                    self.export_csv();
-                }
-
-                let current = self.filter();
-                egui::ComboBox::from_id_salt("filter")
-                    .selected_text(current.label())
-                    .width(210.0)
-                    .show_ui(ui, |ui| {
-                        for f in Filter::CHOICES {
-                            if ui.selectable_label(current == f, f.label()).clicked() {
-                                self.filter = Some(f);
-                            }
-                        }
-                    });
-
-                if let Some(h) = &self.scan {
-                    if ui.button("Stop").clicked() {
-                        h.cancel();
-                    }
-                } else if let Some(root) = self.root.clone() {
-                    if ui.button("Rescan").clicked() {
-                        self.start(root, &ctx);
-                    }
-                }
-            });
+            if md5.clicked() {
+                self.verify_md5 = !self.verify_md5;
+            }
+            let has_results = self.slots.iter().any(|s| s.result.is_some());
+            if icon_button(ui, Icon::Download, "Export CSV", false, has_results).clicked() {
+                self.export_csv();
+            }
         });
+    }
 
+    /// Scan and measuring-ahead progress for the footer, drawn right to left.
+    fn progress(&mut self, ui: &mut egui::Ui) {
+        use style::{icon_click, Icon};
+        // Right to left: the count, then the ring before it.
+        let bar = |ui: &mut egui::Ui, frac: f32, text: String| {
+            ui.label(style::mono(text, 13.0).color(style::TEXT));
+            ui.add_space(-2.0);
+            ui.ctx().request_repaint_after(Duration::from_millis(250));
+            style::progress_ring(ui, frac)
+        };
         if self.scanning() {
-            let total = self.slots.len().max(1);
-            ui.add(
-                egui::ProgressBar::new(self.done as f32 / total as f32)
-                    .text(format!("Checking {} / {}", self.done, self.slots.len()))
-                    .fill(ACCENT)
-                    .desired_height(16.0)
-                    .corner_radius(CornerRadius::same(8)),
-            );
+            if icon_click(ui, Icon::Close, "Stop scanning") {
+                self.stop();
+            }
+            let total = self.slots.len();
+            bar(
+                ui,
+                self.done as f32 / total.max(1) as f32,
+                format!("Checking {} / {total}", self.done),
+            )
+            .on_hover_text("Checking files");
+        } else if self.quality.background_left() > 0 {
+            if icon_click(ui, Icon::Close, "Cancel all: stop measuring ahead") {
+                self.stop();
+            }
+            if icon_click(ui, Icon::Skip, "Cancel current: skip to the next file") {
+                self.quality.cancel_current();
+            }
+            let (done, total) = self.quality.background_progress();
+            let name = self
+                .quality
+                .background_current()
+                .and_then(|p| p.file_name())
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            bar(
+                ui,
+                done as f32 / total.max(1) as f32,
+                format!("Quality {} / {total}", done + 1),
+            )
+            .on_hover_text(format!("Measuring audio quality ahead: {name}"));
         }
     }
 
@@ -300,32 +446,46 @@ impl App {
             self.notice = None;
         }
         ui.horizontal(|ui| {
-            ui.label(RichText::new(format!("{} files", self.slots.len())).color(TEXT_DIM));
+            ui.spacing_mut().item_spacing.x = 16.0;
+            let count = |ui: &mut egui::Ui, n: usize, label: &str, color: Color32| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 5.0;
+                    style::dot(ui, color);
+                    ui.label(style::mono_bold(n.to_string(), 13.0));
+                    ui.label(style::mono(label, 13.0).color(TEXT_DIM));
+                });
+            };
             for (n, label, status) in [
-                (c.genuine, "genuine", Status::Genuine),
-                (c.suspect, "suspect", Status::Suspect),
-                (c.fake, "fake", Status::Fake),
-                (c.corrupt, "corrupt", Status::Corrupt),
-                (c.lossy, "lossy", Status::Lossy),
+                (c.genuine, "Genuine", Status::Genuine),
+                (c.suspect, "Suspect", Status::Suspect),
+                (c.fake, "Fake", Status::Fake),
+                (c.corrupt, "Corrupt", Status::Corrupt),
+                (c.lossy, "Lossy", Status::Lossy),
             ] {
-                ui.label(RichText::new(format!("●  {n} {label}")).color(status_color(status)));
+                count(ui, n, label, status_color(status));
             }
             if c.errors > 0 {
-                ui.label(
-                    RichText::new(format!("●  {} unreadable", c.errors))
-                        .color(outcome_color(Outcome::Error)),
-                );
+                count(ui, c.errors, "Unreadable", outcome_color(Outcome::Error));
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui.small_button("About").clicked() {
+                let link = |ui: &mut egui::Ui, text: &str| {
+                    ui.add(
+                        egui::Button::new(RichText::new(text).size(14.0).color(style::TEXT))
+                            .frame(false),
+                    )
+                    .clicked()
+                };
+                if link(ui, "ℹ About") {
                     self.about_open = true;
                 }
-                if ui.small_button("Settings").clicked() {
+                if link(ui, "⚙ Settings") {
+                    self.cache_bytes = None;
                     self.settings_open = true;
                 }
-                ui.label(RichText::new(concat!("v", env!("CARGO_PKG_VERSION"))).color(TEXT_DIM));
+                ui.add_space(12.0);
+                self.progress(ui);
                 if let Some((msg, _)) = &self.notice {
-                    ui.label(RichText::new(msg).color(TEXT_DIM));
+                    ui.label(style::mono(msg, 11.0).color(TEXT_DIM));
                     ui.ctx().request_repaint_after(Duration::from_secs(1));
                 }
             });
@@ -368,6 +528,7 @@ impl App {
             PickFolder,
             Clear,
             Recheck,
+            ClearCache,
         }
         let mut open = self.settings_open;
         let mut act: Option<Act> = None;
@@ -458,6 +619,31 @@ impl App {
                         mode_changed = true;
                     }
                 }
+                ui.add_space(8.0);
+                ui.separator();
+                ui.add_space(4.0);
+                ui.label(RichText::new("Cache").strong());
+                ui.label(
+                    RichText::new(
+                        "Check results and quality measurements are kept so unchanged \
+                         files open at once. Clearing makes every file be checked again.",
+                    )
+                    .small()
+                    .color(TEXT_DIM),
+                );
+                let bytes = *self.cache_bytes.get_or_insert_with(cache_size);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(format!("{:.1} MB on disk", bytes as f64 / 1e6))
+                            .color(TEXT_DIM),
+                    );
+                    if ui
+                        .add_enabled(bytes > 0, egui::Button::new("Clear cache"))
+                        .clicked()
+                    {
+                        act = Some(Act::ClearCache);
+                    }
+                });
             });
         self.settings_open = open;
 
@@ -486,6 +672,16 @@ impl App {
                 changed = true;
             }
             Some(Act::Recheck) => changed = true,
+            Some(Act::ClearCache) => {
+                self.stop();
+                self.quality.clear();
+                clear_cache();
+                if let Some(d) = settings::quality_dir() {
+                    let _ = std::fs::remove_dir_all(d);
+                }
+                self.cache_bytes = None;
+                self.notice = Some(("Cache cleared".into(), Instant::now()));
+            }
             None => {}
         }
         if changed {
@@ -495,7 +691,83 @@ impl App {
         }
     }
 
+    fn queue_header(&mut self, ui: &mut egui::Ui) {
+        use style::Icon;
+        let ctx = ui.ctx().clone();
+        let c = Counts::of(&self.slots);
+        card().show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.spacing_mut().item_spacing.y = 8.0;
+            ui.horizontal(|ui| {
+                ui.label(style::heading("Queue", 18.0).color(ui.visuals().strong_text_color()));
+                style::badge(ui, &format!("{} FILES", self.slots.len()), ACCENT);
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    // Stopping lives in the footer, next to the progress.
+                    if let (false, Some(root)) = (self.scanning(), self.root.clone()) {
+                        if style::icon_click(ui, Icon::Sync, "Rescan folder") {
+                            self.start(root, &ctx);
+                        }
+                    }
+                });
+            });
+            egui::Frame::new()
+                .fill(LOWEST)
+                .corner_radius(CornerRadius::same(4))
+                .inner_margin(Margin::symmetric(8, 5))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        ui.spacing_mut().interact_size.y = 18.0;
+                        let (r, _) = ui.allocate_exact_size(egui::vec2(14.0, 18.0), Sense::hover());
+                        style::paint_icon(ui.painter(), r.center(), Icon::Search, TEXT_DIM);
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.search)
+                                .hint_text(style::mono("Filter file name…", 11.5))
+                                .font(egui::FontId::monospace(11.5))
+                                .frame(egui::Frame::NONE)
+                                .margin(Margin::ZERO)
+                                .desired_width(f32::INFINITY),
+                        );
+                    });
+                });
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                let problems = c.suspect + c.fake + c.corrupt + c.errors;
+                style::badge(ui, &format!("{} OK", c.genuine + c.lossy), GREEN);
+                if problems > 0 {
+                    let word = if problems == 1 { "PROBLEM" } else { "PROBLEMS" };
+                    style::badge(ui, &format!("{problems} {word}"), style::AMBER);
+                }
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.spacing_mut().interact_size.y = 22.0;
+                    ui.spacing_mut().button_padding = egui::vec2(8.0, 2.0);
+                    let short = |f: Filter| match f {
+                        Filter::All => "All files",
+                        Filter::Problems => "Problems",
+                        Filter::Genuine => "Genuine",
+                        Filter::Lossy => "Lossy",
+                    };
+                    let current = self.filter();
+                    egui::ComboBox::from_id_salt("filter")
+                        .selected_text(style::mono(short(current), 11.5))
+                        .width(118.0)
+                        .show_ui(ui, |ui| {
+                            for f in Filter::CHOICES {
+                                if ui.selectable_label(current == f, f.label()).clicked() {
+                                    self.filter = Some(f);
+                                }
+                            }
+                        });
+                });
+            });
+        });
+        ui.add_space(6.0);
+    }
+
     fn file_list(&mut self, ui: &mut egui::Ui) {
+        if self.root.is_some() {
+            self.queue_header(ui);
+        }
         if self.slots.is_empty() {
             ui.add_space(16.0);
             ui.label(
@@ -517,83 +789,178 @@ impl App {
             return;
         }
 
-        const ROW_H: f32 = 46.0;
+        // The selected row is taller: it adds the folder and file size.
+        const ROW_H: f32 = 56.0;
+        const SEL_H: f32 = 74.0;
+        let heights: Vec<f32> = vis
+            .iter()
+            .map(|&i| {
+                if self.selected == Some(i) {
+                    SEL_H
+                } else {
+                    ROW_H
+                }
+            })
+            .collect();
+        let total: f32 = heights.iter().sum();
         let scroll_to = std::mem::take(&mut self.scroll_to_selected);
+        let mut rescan = None;
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
-            .show_rows(ui, ROW_H, vis.len(), |ui, range| {
-                for &i in &vis[range] {
-                    let slot = &self.slots[i];
-                    let o = slot.outcome();
-                    let (rect, resp) = ui.allocate_exact_size(
-                        egui::vec2(ui.available_width(), ROW_H),
-                        Sense::click(),
-                    );
+            .show_viewport(ui, |ui, viewport| {
+                let w = ui.available_width();
+                let (area, _) = ui.allocate_exact_size(egui::vec2(w, total), Sense::hover());
+                let mut y = 0.0;
+                for (&i, &h) in vis.iter().zip(&heights) {
+                    let local = egui::Rect::from_min_size(egui::pos2(0.0, y), egui::vec2(w, h));
+                    let rect = local.translate(area.min.to_vec2());
+                    y += h;
+                    let selected = self.selected == Some(i);
+                    if selected && scroll_to {
+                        ui.scroll_to_rect(rect, None);
+                    }
+                    if !viewport.intersects(local) {
+                        continue;
+                    }
+                    let resp = ui.interact(rect, ui.id().with(("row", i)), Sense::click());
                     if resp.clicked() {
                         self.selected = Some(i);
                     }
-                    let selected = self.selected == Some(i);
-                    if selected && scroll_to {
-                        resp.scroll_to_me(None);
-                    }
-
-                    let painter = ui.painter();
-                    let bg = rect.shrink2(egui::vec2(0.0, 1.0));
-                    if selected {
-                        painter.rect_filled(bg, CornerRadius::same(8), alpha(ACCENT, 34));
-                    } else if resp.hovered() {
-                        painter.rect_filled(bg, CornerRadius::same(8), alpha(Color32::WHITE, 10));
-                    }
-
-                    let cy = rect.center().y;
-                    let left = rect.left() + 12.0;
-                    // Verdict chip on the right, vertically centred.
-                    let chip_w = chip_right(
-                        painter,
-                        egui::pos2(rect.right() - 10.0, cy - 8.0),
-                        outcome_label(o),
-                        outcome_color(o),
-                    );
-                    let text_right = (rect.right() - 10.0 - chip_w - 10.0).max(left);
-                    let clip = egui::Rect::from_min_max(
-                        egui::pos2(left, rect.top()),
-                        egui::pos2(text_right, rect.bottom()),
-                    );
-                    let p = painter.with_clip_rect(clip);
-                    // The second line can use the full row width.
-                    let full = egui::Rect::from_min_max(
-                        egui::pos2(left, rect.top()),
-                        egui::pos2(rect.right() - 8.0, rect.bottom()),
-                    );
-                    let p2 = painter.with_clip_rect(full);
-                    let file = Path::new(&slot.name)
-                        .file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| slot.name.clone());
-                    let summary = match &slot.result {
-                        Some(Ok(r)) => row_summary(&r.info),
-                        Some(Err(_)) => "could not be read".to_string(),
-                        None => String::new(),
-                    };
-                    // Line 1: file name. Line 2: format details.
-                    p.text(
-                        egui::pos2(left, cy - 8.0),
-                        Align2::LEFT_CENTER,
-                        file,
-                        FontId::proportional(14.0),
-                        ui.visuals().text_color(),
-                    );
-                    p2.text(
-                        egui::pos2(left, cy + 9.0),
-                        Align2::LEFT_CENTER,
-                        summary,
-                        FontId::proportional(10.5),
-                        TEXT_DIM,
-                    );
-                    // The folder is no longer drawn in the row; show it on hover.
-                    resp.on_hover_text(slot.name.clone());
+                    self.paint_row(ui, i, rect, selected, resp.hovered());
+                    resp.context_menu(|ui| {
+                        if ui.button("Rescan this file").clicked() {
+                            rescan = Some(i);
+                            ui.close();
+                        }
+                    });
+                    resp.on_hover_text(self.slots[i].name.clone());
                 }
             });
+        if let Some(i) = rescan {
+            self.rescan_file(i, &ui.ctx().clone());
+        }
+    }
+
+    fn paint_row(&self, ui: &egui::Ui, i: usize, rect: egui::Rect, selected: bool, hovered: bool) {
+        use style::{fit_text, paint_icon, Icon};
+        let slot = &self.slots[i];
+        let o = slot.outcome();
+        let painter = ui.painter();
+        let bg = rect.shrink2(egui::vec2(0.0, 3.0));
+        let fill = if selected {
+            style::HIGH
+        } else if hovered {
+            Color32::from_rgb(31, 36, 50)
+        } else {
+            style::CARD
+        };
+        painter.rect_filled(bg, CornerRadius::same(3), fill);
+        if selected {
+            painter.rect_filled(
+                egui::Rect::from_min_size(bg.min, egui::vec2(3.0, bg.height())),
+                CornerRadius {
+                    nw: 3,
+                    sw: 3,
+                    ne: 0,
+                    se: 0,
+                },
+                ACCENT,
+            );
+        }
+
+        let left = bg.left() + 12.0;
+        let right = bg.right() - 10.0;
+        let lines = [bg.top() + 16.0, bg.top() + 35.0, bg.top() + 53.0];
+        let strong = ui.visuals().strong_text_color();
+        let mono = FontId::monospace(11.0);
+
+        // Line 1: icon, file name and verdict tag.
+        let icon_color = if selected { ACCENT } else { TEXT_DIM };
+        let icon_at = egui::pos2(left + 5.0, lines[0]);
+        // A file being checked or measured spins instead of showing its icon.
+        if slot.result.is_none() || self.quality.is_measuring(&slot.path) {
+            style::paint_spinner(painter, icon_at, ui.input(|i| i.time));
+            ui.ctx().request_repaint();
+        } else {
+            paint_icon(painter, icon_at, Icon::File, icon_color);
+        }
+        let chip_w = chip_right(
+            painter,
+            egui::pos2(right, lines[0]),
+            outcome_label(o),
+            outcome_color(o),
+        );
+        let file = Path::new(&slot.name)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| slot.name.clone());
+        let name_font = if selected {
+            FontId::new(13.5, style::bold_family())
+        } else {
+            FontId::proportional(13.5)
+        };
+        let name_left = left + 20.0;
+        fit_text(
+            painter,
+            egui::pos2(name_left, lines[0]),
+            file,
+            name_font,
+            strong,
+            right - chip_w - 8.0 - name_left,
+        );
+
+        // Line 2: format, or a short reason for a problem, and the duration.
+        let (detail, detail_color, duration) = match &slot.result {
+            Some(Ok(r)) => (
+                row_summary(&r.info),
+                TEXT_DIM,
+                r.info.duration_secs.map(fmt_duration).unwrap_or_default(),
+            ),
+            Some(Err(_)) => ("could not be read".to_string(), TEXT_DIM, String::new()),
+            None => ("checking…".to_string(), TEXT_DIM, String::new()),
+        };
+        let dur_w = painter
+            .text(
+                egui::pos2(right, lines[1]),
+                Align2::RIGHT_CENTER,
+                duration,
+                FontId::new(11.0, style::mono_bold_family()),
+                strong,
+            )
+            .width();
+        fit_text(
+            painter,
+            egui::pos2(left, lines[1]),
+            detail,
+            mono.clone(),
+            detail_color,
+            right - dur_w - 10.0 - left,
+        );
+
+        // Line 3, selected only: full path and file size.
+        if selected {
+            let size = match &slot.result {
+                Some(Ok(r)) => format!("{:.1} MB", r.info.size_bytes as f64 / 1_048_576.0),
+                _ => String::new(),
+            };
+            let size_w = painter
+                .text(
+                    egui::pos2(right, lines[2]),
+                    Align2::RIGHT_CENTER,
+                    size,
+                    mono.clone(),
+                    ACCENT,
+                )
+                .width();
+            fit_text(
+                painter,
+                egui::pos2(left, lines[2]),
+                slot.path.display().to_string(),
+                FontId::monospace(10.5),
+                TEXT_DIM,
+                right - size_w - 10.0 - left,
+            );
+        }
     }
 
     fn welcome(&mut self, ui: &mut egui::Ui) {
@@ -660,142 +1027,453 @@ impl App {
                     ui.label(e);
                 });
             }
-            Some(Ok(r)) => report_view(ui, slot, r, &mut self.quality),
+            Some(Ok(r)) => {
+                if report_view(ui, slot, r, &mut self.quality) {
+                    self.rescan_file(i, &ui.ctx().clone());
+                }
+            }
         }
     }
 }
 
-fn report_view(ui: &mut egui::Ui, slot: &Slot, r: &FileReport, quality: &mut QualityStore) {
+/// "44.1", "48", "22.05": kHz without trailing zeros.
+fn khz(hz: f32) -> String {
+    let s = format!("{:.2}", hz / 1000.0);
+    s.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
+/// 13812672 -> "13,812,672".
+fn thousands(n: u64) -> String {
+    let s = n.to_string();
+    let mut out = String::new();
+    for (k, ch) in s.chars().enumerate() {
+        if k > 0 && (s.len() - k).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out
+}
+
+/// How much of the band up to Nyquist carries content, in percent.
+fn nyquist_pct(r: &FileReport) -> Option<f32> {
+    let a = r.analysis.as_ref()?;
+    let sr = r.info.sample_rate? as f32;
+    Some((a.cutoff.bandwidth_hz / (sr / 2.0) * 100.0).min(100.0))
+}
+
+/// One sentence on why a genuine file passed.
+fn genuine_summary(r: &FileReport) -> Option<String> {
+    let mut parts = Vec::new();
+    if let Some(a) = &r.analysis {
+        let edge = if a.cutoff.cliff_db < verdict::SHARP_EDGE_DB {
+            "a natural roll-off"
+        } else {
+            "a sharp edge"
+        };
+        parts.push(format!(
+            "Content runs to {} kHz with {edge}",
+            khz(a.cutoff.bandwidth_hz)
+        ));
+        if let Some(e) = a.effective_bits {
+            parts.push(format!("all {e} bits carry signal"));
+        }
+    }
+    if r.md5.as_ref().is_some_and(|m| m.status == Md5Status::Match) {
+        parts.push("the audio matches its MD5".into());
+    }
+    (!parts.is_empty()).then(|| parts.join(", ") + ".")
+}
+
+/// Evidence chips for a genuine file: the checks it passed plus facts from
+/// the measurement that back them.
+fn genuine_chips(r: &FileReport) -> Vec<String> {
+    let (bits, passed): (Vec<_>, Vec<_>) = r
+        .verdict
+        .reasons
+        .iter()
+        .cloned()
+        .partition(|s| s.ends_with("-bit data"));
+    // Strongest evidence first: MD5, then the bandwidth checks.
+    let mut ranked: Vec<String> = passed
+        .iter()
+        .filter(|s| s.contains("MD5"))
+        .cloned()
+        .collect();
+    ranked.extend(passed.iter().filter(|s| !s.contains("MD5")).cloned());
+    if let Some(a) = &r.analysis {
+        let c = &a.cutoff;
+        if c.cliff_db < verdict::SHARP_EDGE_DB {
+            ranked.push(format!("No brick-wall lowpass ({:.0} dB edge)", c.cliff_db));
+        }
+    }
+    if !r.info.extension_mismatch {
+        ranked.push(format!("Content matches .{}", r.info.extension));
+    }
+    // Bit depth always shows, plus the two most telling of the rest.
+    bits.into_iter().chain(ranked.into_iter().take(2)).collect()
+}
+
+/// Caption over a value, right-aligned, for the verdict banner.
+fn right_stat(ui: &mut egui::Ui, label: &str, value: String, color: Color32) {
+    ui.with_layout(Layout::top_down(Align::Max), |ui| {
+        ui.spacing_mut().item_spacing.y = 2.0;
+        ui.add(egui::Label::new(style::caption(label)).extend());
+        ui.add(egui::Label::new(style::mono_bold(value, 17.5).color(color)).extend());
+    });
+}
+
+/// Draw the report; returns true when the rescan button was clicked.
+fn report_view(ui: &mut egui::Ui, slot: &Slot, r: &FileReport, quality: &mut QualityStore) -> bool {
+    use style::{mono, mono_bold, Stat};
     let color = status_color(r.verdict.status);
+    let mut rescan = false;
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            ui.add_space(4.0);
+            // Keep cards clear of the scroll bar.
+            ui.set_max_width(ui.available_width() - 12.0);
+            ui.spacing_mut().item_spacing.y = 10.0;
+            let i = &r.info;
             let file = Path::new(&slot.name)
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_else(|| slot.name.clone());
-            ui.label(RichText::new(file).size(20.0).strong());
-            ui.label(
-                RichText::new(slot.path.display().to_string())
-                    .small()
-                    .color(TEXT_DIM),
-            );
-            ui.add_space(4.0);
+            let used = r.analysis.as_ref().and_then(|a| a.effective_bits);
 
-            tinted_card(color).show(ui, |ui| {
+            card().show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ui.label(
-                    RichText::new(r.verdict.status.label())
-                        .size(28.0)
-                        .strong()
-                        .color(color),
-                );
-                ui.add_space(2.0);
-                for reason in &r.verdict.reasons {
-                    ui.label(RichText::new(format!("•  {reason}")).size(14.5));
-                }
-                if let Some(e) = &r.analysis_error {
-                    ui.label(RichText::new(format!("•  analysis failed: {e}")).color(TEXT_DIM));
-                }
-            });
+                ui.spacing_mut().item_spacing.y = 10.0;
 
-            let i = &r.info;
-            ui.horizontal_wrapped(|ui| {
-                tile(
+                // Identity: name and path on the left, format tags on the right.
+                egui::Sides::new().show(
                     ui,
-                    "SAMPLE RATE",
-                    &i.sample_rate.map_or("-".into(), fmt_rate),
-                );
-                let used = r.analysis.as_ref().and_then(|a| a.effective_bits);
-                tile(
-                    ui,
-                    "BIT DEPTH",
-                    &match (i.bits_per_sample, used) {
-                        (Some(b), Some(e)) if e != b => format!("{b}-bit ({e} used)"),
-                        (Some(b), _) => format!("{b}-bit"),
-                        (None, Some(e)) => format!("{e}-bit used"),
-                        (None, None) => bit_depth_text(i),
+                    |ui| {
+                        ui.vertical(|ui| {
+                            ui.spacing_mut().item_spacing.y = 2.0;
+                            ui.label(style::heading(file, 24.0));
+                            ui.label(mono(slot.path.display().to_string(), 12.0).color(TEXT_DIM));
+                        });
+                    },
+                    |ui| {
+                        // Centre the tags on the two-line title block.
+                        ui.with_layout(Layout::top_down(Align::Max), |ui| {
+                            ui.add_space(13.0);
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                ui.spacing_mut().item_spacing.x = 6.0;
+                                // Right to left: the last tag added sits leftmost.
+                                rescan =
+                                    style::icon_click(ui, style::Icon::Sync, "Rescan this file");
+                                if i.lossless {
+                                    style::badge(ui, "LOSSLESS", GREEN);
+                                } else {
+                                    style::badge(ui, "LOSSY", status_color(Status::Lossy));
+                                }
+                                style::badge(ui, &i.codec.to_uppercase(), ACCENT);
+                            });
+                        });
                     },
                 );
-                if let Some(a) = &r.analysis {
-                    tile(
-                        ui,
-                        "CONTENT ENDS",
-                        &format!("{:.1} kHz", a.cutoff.bandwidth_hz / 1000.0),
-                    );
+
+                let genuine = r.verdict.status == Status::Genuine;
+
+                // Verdict banner.
+                egui::Frame::new()
+                    .fill(LOWEST)
+                    .corner_radius(CornerRadius::same(4))
+                    .inner_margin(Margin::same(12))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        egui::Sides::new().shrink_left().wrap().show(
+                            ui,
+                            |ui| {
+                                let (icon, _) =
+                                    ui.allocate_exact_size(egui::vec2(44.0, 44.0), Sense::hover());
+                                ui.painter().rect_filled(
+                                    icon,
+                                    CornerRadius::same(4),
+                                    alpha(color, 40),
+                                );
+                                let glyph = match r.verdict.status {
+                                    Status::Genuine => "✔",
+                                    Status::Lossy | Status::Unchecked => "ℹ",
+                                    Status::Suspect => "⚠",
+                                    Status::Corrupt | Status::Fake => "✕",
+                                };
+                                ui.painter().text(
+                                    icon.center(),
+                                    Align2::CENTER_CENTER,
+                                    glyph,
+                                    FontId::proportional(22.0),
+                                    color,
+                                );
+                                ui.add_space(4.0);
+                                ui.vertical(|ui| {
+                                    ui.spacing_mut().item_spacing.y = 2.0;
+                                    let mut title = r.verdict.status.label().to_uppercase();
+                                    if r.verdict.status == Status::Genuine && i.lossless {
+                                        title.push_str(" LOSSLESS");
+                                    }
+                                    ui.label(style::heading(title, 25.0).color(color));
+                                    let line = if genuine {
+                                        genuine_summary(r)
+                                    } else {
+                                        r.verdict.reasons.first().cloned()
+                                    };
+                                    if let Some(line) = line {
+                                        ui.label(RichText::new(line).size(14.0).color(TEXT_DIM));
+                                    }
+                                });
+                            },
+                            |ui| {
+                                ui.spacing_mut().item_spacing.x = 28.0;
+                                let Some(a) = &r.analysis else {
+                                    return;
+                                };
+                                if let (Some(b), Some(e)) = (i.bits_per_sample, used) {
+                                    right_stat(
+                                        ui,
+                                        "BIT DEPTH USED",
+                                        format!("{e} / {b}"),
+                                        if e >= b { GREEN } else { style::AMBER },
+                                    );
+                                }
+                                let strong = ui.visuals().strong_text_color();
+                                right_stat(
+                                    ui,
+                                    "CONTENT ENDS",
+                                    format!("{} kHz", khz(a.cutoff.bandwidth_hz)),
+                                    strong,
+                                );
+                                if let Some(pct) = nyquist_pct(r) {
+                                    right_stat(ui, "NYQUIST USED", format!("{pct:.1}%"), strong);
+                                }
+                            },
+                        );
+                    });
+
+                let mut chips: Vec<String> = if genuine {
+                    genuine_chips(r)
+                } else {
+                    r.verdict.reasons.iter().skip(1).cloned().collect()
+                };
+                if let Some(e) = &r.analysis_error {
+                    chips.push(format!("analysis failed: {e}"));
                 }
-                tile(
-                    ui,
-                    "DURATION",
-                    &i.duration_secs.map_or("-".into(), fmt_duration),
-                );
-                tile(
-                    ui,
-                    "SIZE",
-                    &format!("{:.1} MB", i.size_bytes as f64 / 1_048_576.0),
-                );
+                for row in chips.chunks(3) {
+                    ui.columns(3, |c| {
+                        for (col, text) in c.iter_mut().zip(row) {
+                            style::reason_chip(col, text, color);
+                        }
+                    });
+                }
             });
+
+            // Headline numbers.
+            let rate = i.sample_rate;
+            let dur = i.duration_secs;
+            let kbps = dur
+                .filter(|&d| d > 0.0)
+                .map(|d| i.size_bytes as f64 * 8.0 / d / 1000.0);
+            let tiles = [
+                Stat {
+                    label: "SAMPLE RATE",
+                    value: rate.map_or("-".into(), |hz| khz(hz as f32)),
+                    unit: "kHz",
+                    note: rate.map_or(String::new(), |hz| {
+                        format!("Nyquist: {} kHz", khz(hz as f32 / 2.0))
+                    }),
+                    color: None,
+                    note_color: ACCENT,
+                },
+                {
+                    let padded = matches!((i.bits_per_sample, used), (Some(b), Some(e)) if e < b);
+                    Stat {
+                        label: "BIT DEPTH",
+                        value: i
+                            .bits_per_sample
+                            .map_or_else(|| bit_depth_text(i), |b| b.to_string()),
+                        unit: if i.bits_per_sample.is_some() {
+                            "bit"
+                        } else {
+                            ""
+                        },
+                        note: match (i.bits_per_sample, used) {
+                            (Some(_), Some(e)) if padded => format!("only {e}-bit used"),
+                            (Some(b), _) => format!("{:.1} dB dyn. window", b as f64 * 6.02),
+                            _ => String::new(),
+                        },
+                        color: None,
+                        note_color: if padded { style::AMBER } else { TEXT_DIM },
+                    }
+                },
+                Stat {
+                    label: "CONTENT ENDS",
+                    value: r
+                        .analysis
+                        .as_ref()
+                        .map_or("-".into(), |a| khz(a.cutoff.bandwidth_hz)),
+                    unit: "kHz",
+                    note: r.analysis.as_ref().map_or(String::new(), |a| {
+                        format!(
+                            "Edge: {:.0} dB @ {}k",
+                            a.cutoff.cliff_db,
+                            khz(a.cutoff.cliff_hz)
+                        )
+                    }),
+                    color: r.analysis.as_ref().map(|_| color),
+                    note_color: TEXT_DIM,
+                },
+                Stat {
+                    label: "DURATION",
+                    value: dur.map_or("-".into(), fmt_duration),
+                    unit: "min",
+                    note: match (dur, rate) {
+                        (Some(d), Some(hz)) => {
+                            format!("{} samples", thousands((d * hz as f64).round() as u64))
+                        }
+                        _ => String::new(),
+                    },
+                    color: None,
+                    note_color: TEXT_DIM,
+                },
+                Stat {
+                    label: "SIZE",
+                    value: format!("{:.1}", i.size_bytes as f64 / 1_048_576.0),
+                    unit: "MB",
+                    note: kbps.map_or(String::new(), |k| {
+                        format!("{} kbps", thousands(k.round() as u64))
+                    }),
+                    color: Some(ACCENT),
+                    note_color: TEXT_DIM,
+                },
+            ];
+            ui.columns(tiles.len(), |c| {
+                for (col, s) in c.iter_mut().zip(&tiles) {
+                    style::stat_tile(col, s, style::CARD, 17.0);
+                }
+            });
+
+            quality_view::show_stats(ui, quality, &slot.path, r);
 
             if let Some(a) = &r.analysis {
                 card().show(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    ui.label(RichText::new("AVERAGE SPECTRUM").small().color(TEXT_DIM));
+                    ui.horizontal(|ui| {
+                        style::card_title(ui, "📈", "Average spectrum plot");
+                        style::badge(
+                            ui,
+                            &format!(
+                                "FFT SIZE {} · BLACKMAN-HARRIS",
+                                truelossless_core::spectrum::FFT_SIZE
+                            ),
+                            TEXT_DIM,
+                        );
+                    });
                     ui.add_space(4.0);
                     plot::spectrum_plot(ui, &a.spectrum, &a.cutoff);
                 });
             }
 
-            quality_view::show(ui, quality, &slot.path, r);
+            quality_view::show_spectrogram(
+                ui,
+                quality,
+                &slot.path,
+                r.analysis.as_ref().map(|a| &a.cutoff),
+            );
 
             card().show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                egui::Grid::new("details")
-                    .num_columns(2)
-                    .spacing([24.0, 6.0])
-                    .show(ui, |ui| {
-                        let mut row = |k: &str, v: String| {
-                            ui.label(RichText::new(k).color(TEXT_DIM));
-                            ui.label(v);
-                            ui.end_row();
-                        };
-                        row(
-                            "Container",
-                            format!("{} (extension .{})", i.container.name(), i.extension),
-                        );
-                        row(
-                            "Codec",
-                            format!(
-                                "{} ({})",
-                                i.codec,
-                                if i.lossless { "lossless" } else { "lossy" }
-                            ),
-                        );
-                        row("Channels", i.channels.map_or("-".into(), |v| v.to_string()));
-                        if let Some(a) = &r.analysis {
-                            row(
-                                "Steepest edge",
-                                format!(
-                                    "{:.0} dB at {:.1} kHz",
-                                    a.cutoff.cliff_db,
-                                    a.cutoff.cliff_hz / 1000.0
-                                ),
-                            );
-                        }
-                        if let Some(m) = &r.md5 {
-                            row(
-                                "FLAC MD5",
-                                match m.status {
-                                    Md5Status::Match => "verified".into(),
-                                    Md5Status::Mismatch => "MISMATCH".into(),
-                                    Md5Status::Unavailable => "not stored in file".into(),
-                                },
-                            );
-                        }
+                let mut cells: Vec<(&str, String, Option<Color32>)> = vec![
+                    (
+                        "CONTAINER",
+                        format!("{} (.{})", i.container.name(), i.extension),
+                        None,
+                    ),
+                    (
+                        "CODEC",
+                        format!(
+                            "{} ({})",
+                            i.codec,
+                            if i.codec.starts_with("pcm") {
+                                "uncompressed"
+                            } else if i.lossless {
+                                "lossless"
+                            } else {
+                                "lossy"
+                            }
+                        ),
+                        None,
+                    ),
+                    (
+                        "CHANNELS",
+                        i.channels.map_or("-".into(), |v| match v {
+                            1 => "1 (Mono)".into(),
+                            2 => "2 (Stereo)".into(),
+                            6 => "6 (5.1)".into(),
+                            8 => "8 (7.1)".into(),
+                            n => n.to_string(),
+                        }),
+                        None,
+                    ),
+                ];
+                if let Some(a) = &r.analysis {
+                    let kind = if a.cutoff.cliff_db < verdict::SHARP_EDGE_DB {
+                        "Natural"
+                    } else {
+                        "Sharp"
+                    };
+                    cells.push((
+                        "STEEPEST EDGE",
+                        format!(
+                            "{:.0} dB @ {} kHz ({kind})",
+                            a.cutoff.cliff_db,
+                            khz(a.cutoff.cliff_hz)
+                        ),
+                        Some(color),
+                    ));
+                }
+                if let Some(m) = &r.md5 {
+                    cells.push(match m.status {
+                        Md5Status::Match => ("FLAC MD5", "verified".into(), Some(GREEN)),
+                        Md5Status::Mismatch => (
+                            "FLAC MD5",
+                            "MISMATCH".into(),
+                            Some(status_color(Status::Fake)),
+                        ),
+                        Md5Status::Unavailable => ("FLAC MD5", "not stored in file".into(), None),
                     });
+                }
+                ui.columns(cells.len(), |c| {
+                    for (col, (k, v, tint)) in c.iter_mut().zip(&cells) {
+                        col.spacing_mut().item_spacing.y = 3.0;
+                        col.label(style::caption(*k));
+                        let mut t = mono_bold(v, 13.5);
+                        if let Some(tc) = tint {
+                            t = t.color(*tc);
+                        }
+                        col.label(t);
+                    }
+                });
             });
             ui.add_space(8.0);
         });
+    rescan
+}
+
+/// Bytes used by the check cache and the quality cache.
+fn cache_size() -> u64 {
+    let file = settings::cache_file()
+        .and_then(|f| std::fs::metadata(f).ok())
+        .map_or(0, |m| m.len());
+    let dir = settings::quality_dir()
+        .and_then(|d| std::fs::read_dir(d).ok())
+        .map_or(0, |rd| {
+            rd.filter_map(|e| e.ok()?.metadata().ok())
+                .map(|m| m.len())
+                .sum()
+        });
+    file + dir
 }
 
 fn drop_overlay(ctx: &egui::Context) {
@@ -830,7 +1508,7 @@ impl eframe::App for App {
             self.start(path, &ctx);
         }
         self.pump_messages();
-        self.quality.poll();
+        self.quality.poll(&ctx);
         self.handle_drop(&ctx);
         self.handle_keys(&ctx);
 
@@ -842,28 +1520,40 @@ impl eframe::App for App {
                 bottom,
             })
         };
+        egui::Panel::top("title")
+            .frame(egui::Frame::new().fill(LOWEST))
+            .show_separator_line(false)
+            .show(ui, |ui| self.title_bar(ui));
         egui::Panel::top("top")
-            .frame(bar(12, 12))
+            .frame(bar(10, 10))
+            .show_separator_line(false)
             .show(ui, |ui| self.top_bar(ui));
         egui::Panel::bottom("status")
-            .frame(bar(6, 6))
+            .frame(bar(6, 6).fill(LOWEST))
+            .show_separator_line(false)
             .show(ui, |ui| self.status_bar(ui));
         egui::Panel::left("files")
             .frame(
                 egui::Frame::new()
-                    .fill(PANEL)
+                    .fill(BG)
                     .inner_margin(Margin::symmetric(8, 8)),
             )
             .resizable(true)
+            .show_separator_line(false)
             .default_size(440.0)
             .size_range(300.0..=720.0)
-            .show(ui, |ui| self.file_list(ui));
-        egui::CentralPanel::default()
-            .frame(
+            .show(ui, |ui| {
                 egui::Frame::new()
-                    .fill(BG)
-                    .inner_margin(Margin::symmetric(20, 12)),
-            )
+                    .inner_margin(Margin::symmetric(6, 0))
+                    .show(ui, |ui| self.file_list(ui));
+            });
+        egui::CentralPanel::default()
+            .frame(egui::Frame::new().fill(BG).inner_margin(Margin {
+                left: 4,
+                right: 20,
+                top: 8,
+                bottom: 8,
+            }))
             .show(ui, |ui| self.details(ui));
 
         self.about_window(&ctx);

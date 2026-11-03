@@ -8,6 +8,7 @@ use crate::probe::ProbeError;
 use realfft::RealFftPlanner;
 use std::f64::consts::PI;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use symphonia::core::audio::SampleBuffer;
 use symphonia::core::errors::Error as SymError;
 
@@ -476,8 +477,25 @@ pub fn analyze_quality_with(
     ffmpeg: Option<&crate::ffmpeg::Toolchain>,
     opts: QualityOptions,
 ) -> Result<Quality, ProbeError> {
+    analyze_quality_cancellable(path, ffmpeg, opts, &AtomicBool::new(false))
+}
+
+/// The error a measurement stopped through its cancel flag returns.
+pub fn cancelled() -> ProbeError {
+    ProbeError::Decode("cancelled".into())
+}
+
+/// Like [`analyze_quality_with`], but stops early with [`cancelled`] once
+/// `cancel` is set.
+pub fn analyze_quality_cancellable(
+    path: &Path,
+    ffmpeg: Option<&crate::ffmpeg::Toolchain>,
+    opts: QualityOptions,
+    cancel: &AtomicBool,
+) -> Result<Quality, ProbeError> {
+    let analyze_quality = |p: &Path| analyze_quality_until(p, cancel);
     let run_ffmpeg = |tc: &crate::ffmpeg::Toolchain| {
-        crate::ffmpeg::analyze_quality_ffmpeg(tc, path, opts.duration_hint)
+        crate::ffmpeg::analyze_quality_ffmpeg(tc, path, opts.duration_hint, cancel)
     };
     match (opts.mode, ffmpeg) {
         (DecoderMode::Native, _) => analyze_quality(path),
@@ -497,6 +515,9 @@ pub fn analyze_quality_with(
                 Decoder::Ffmpeg => run_ffmpeg(tc),
             };
             run(first).or_else(|e1| {
+                if cancel.load(Ordering::Relaxed) {
+                    return Err(cancelled());
+                }
                 run(second).map_err(|e2| {
                     ProbeError::Decode(format!("{}: {e1}; {}: {e2}", first.name(), second.name()))
                 })
@@ -509,11 +530,17 @@ pub fn analyze_quality_with(
 ///
 /// A decoder panic on a damaged file is reported as an error.
 pub fn analyze_quality(path: &Path) -> Result<Quality, ProbeError> {
-    std::panic::catch_unwind(|| analyze_quality_inner(path))
-        .unwrap_or_else(|_| Err(ProbeError::Decode("decoder crashed on this file".into())))
+    analyze_quality_until(path, &AtomicBool::new(false))
 }
 
-fn analyze_quality_inner(path: &Path) -> Result<Quality, ProbeError> {
+fn analyze_quality_until(path: &Path, cancel: &AtomicBool) -> Result<Quality, ProbeError> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        analyze_quality_inner(path, cancel)
+    }))
+    .unwrap_or_else(|_| Err(ProbeError::Decode("decoder crashed on this file".into())))
+}
+
+fn analyze_quality_inner(path: &Path, cancel: &AtomicBool) -> Result<Quality, ProbeError> {
     let size = std::fs::metadata(path).map(|m| m.len()).ok();
     let crate::decode::Opened {
         mut format,
@@ -533,6 +560,9 @@ fn analyze_quality_inner(path: &Path) -> Result<Quality, ProbeError> {
 
     // Stops at the end of the stream (or on an unrecoverable read error).
     while let Ok(packet) = format.next_packet() {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(cancelled());
+        }
         if packet.track_id() != track_id {
             continue;
         }
@@ -693,6 +723,17 @@ mod tests {
         assert!(analyze_quality_with(&p, None, opts(DecoderMode::Native)).is_ok());
         let e = analyze_quality_with(&p, None, opts(DecoderMode::Ffmpeg)).unwrap_err();
         assert!(e.to_string().contains("ffmpeg"), "{e}");
+        std::fs::remove_file(&p).ok();
+    }
+
+    #[test]
+    fn a_set_cancel_flag_stops_the_measurement() {
+        let p = std::env::temp_dir().join("fc_q_cancel.wav");
+        write_wav(&p, 44_100, &sine(44_100, 3.0, 997.0, 0.5));
+        let stop = AtomicBool::new(true);
+        let e =
+            analyze_quality_cancellable(&p, None, QualityOptions::default(), &stop).unwrap_err();
+        assert_eq!(e.to_string(), cancelled().to_string());
         std::fs::remove_file(&p).ok();
     }
 }

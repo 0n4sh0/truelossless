@@ -14,6 +14,7 @@ use crate::quality::{Meter, Quality};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -308,6 +309,7 @@ pub fn analyze_quality_ffmpeg(
     tc: &Toolchain,
     path: &Path,
     duration_hint: Option<f64>,
+    cancel: &AtomicBool,
 ) -> Result<Quality, ProbeError> {
     let info = probe_stream(tc, path)?;
     let size = std::fs::metadata(path).map(|m| m.len()).ok();
@@ -343,6 +345,11 @@ pub fn analyze_quality_ffmpeg(
     let mut buf = vec![0u8; READ_CHUNK];
     let mut pending: Vec<u8> = Vec::new();
     loop {
+        if cancel.load(Ordering::Relaxed) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(crate::quality::cancelled());
+        }
         match stdout.read(&mut buf) {
             Ok(0) => break,
             Ok(n) => {

@@ -15,7 +15,7 @@ const LOSSY_FAKE_BELOW_HZ: f32 = 17_500.0;
 /// Sharp edges below this (Hz) are suspicious but may be a limited master.
 const LOSSY_SUSPECT_BELOW_HZ: f32 = 19_500.0;
 /// Edge size (dB) that counts as a brick-wall filter rather than roll-off.
-const SHARP_EDGE_DB: f32 = 25.0;
+pub const SHARP_EDGE_DB: f32 = 25.0;
 /// Hi-res files whose content ends below this are 44.1/48 kHz material.
 const UPSAMPLED_BELOW_HZ: f32 = 24_500.0;
 /// Spectral tests need at least this sample rate to be meaningful.
