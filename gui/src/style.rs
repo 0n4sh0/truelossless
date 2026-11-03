@@ -486,6 +486,19 @@ pub fn progress_ring(ui: &mut Ui, frac: f32) -> egui::Response {
     resp
 }
 
+/// A spinning arc in the 14 px icon box at `c`, turning with `time`.
+pub fn paint_spinner(p: &egui::Painter, c: egui::Pos2, time: f64) {
+    let start = (time * 6.0) as f32;
+    let pts: Vec<egui::Pos2> = (0..=24)
+        .map(|k| {
+            let a = start + std::f32::consts::TAU * 0.7 * k as f32 / 24.0;
+            c + 5.5 * egui::vec2(a.cos(), a.sin())
+        })
+        .collect();
+    p.circle_stroke(c, 5.5, Stroke::new(1.8, HIGH));
+    p.add(egui::Shape::line(pts, Stroke::new(1.8, ACCENT)));
+}
+
 /// The app mark: five waveform bars.
 pub fn paint_logo(p: &egui::Painter, c: egui::Pos2, color: Color32) {
     for (k, h) in [5.0, 10.0, 14.0, 8.0, 4.0].into_iter().enumerate() {

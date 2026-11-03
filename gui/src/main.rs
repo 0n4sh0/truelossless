@@ -876,12 +876,14 @@ impl App {
 
         // Line 1: icon, file name and verdict tag.
         let icon_color = if selected { ACCENT } else { TEXT_DIM };
-        paint_icon(
-            painter,
-            egui::pos2(left + 5.0, lines[0]),
-            Icon::File,
-            icon_color,
-        );
+        let icon_at = egui::pos2(left + 5.0, lines[0]);
+        // A file being checked or measured spins instead of showing its icon.
+        if slot.result.is_none() || self.quality.is_measuring(&slot.path) {
+            style::paint_spinner(painter, icon_at, ui.input(|i| i.time));
+            ui.ctx().request_repaint();
+        } else {
+            paint_icon(painter, icon_at, Icon::File, icon_color);
+        }
         let chip_w = chip_right(
             painter,
             egui::pos2(right, lines[0]),

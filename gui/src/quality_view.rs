@@ -128,6 +128,11 @@ impl QualityStore {
         }
     }
 
+    /// True while `path` is being measured, on screen or ahead.
+    pub fn is_measuring(&self, path: &Path) -> bool {
+        self.running.as_deref() == Some(path) || self.bg_current.as_deref() == Some(path)
+    }
+
     /// Measure a skipped file after all.
     pub fn unskip(&mut self, path: &Path) {
         self.skipped.remove(path);
