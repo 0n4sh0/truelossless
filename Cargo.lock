@@ -2910,7 +2910,7 @@ dependencies = [
 
 [[package]]
 name = "truelossless"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "clap",
  "truelossless-core",
@@ -2918,7 +2918,7 @@ dependencies = [
 
 [[package]]
 name = "truelossless-core"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "md-5",
  "rayon",
@@ -2930,7 +2930,7 @@ dependencies = [
 
 [[package]]
 name = "truelossless-gui"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "eframe",
  "rayon",
