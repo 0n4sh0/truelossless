@@ -1,6 +1,7 @@
 //! On-demand audio quality analysis: background worker, stats card and a
 //! spectrogram with per-channel tabs.
 
+use crate::plot::khz;
 use crate::style::{
     alpha, card, card_title, mono, mono_bold, segmented, stat_tile, Stat, ACCENT, AMBER, BORDER,
     GREEN, HIGH, LOWEST, TEXT_DIM,
@@ -15,7 +16,7 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use truelossless_core::cache;
 use truelossless_core::quality::{SPEC_DB_MIN, SPEC_WIN};
 use truelossless_core::{
-    analyze_quality_with, DecoderMode, FileReport, Quality, QualityOptions, Toolchain,
+    analyze_quality_with, Cutoff, DecoderMode, FileReport, Quality, QualityOptions, Toolchain,
 };
 
 const KEEP: usize = 8;
@@ -180,9 +181,14 @@ pub fn show_stats(ui: &mut egui::Ui, store: &mut QualityStore, path: &Path, r: &
 }
 
 /// Draw the spectrogram for `path` once its analysis is ready.
-pub fn show_spectrogram(ui: &mut egui::Ui, store: &mut QualityStore, path: &Path) {
+pub fn show_spectrogram(
+    ui: &mut egui::Ui,
+    store: &mut QualityStore,
+    path: &Path,
+    cut: Option<&Cutoff>,
+) {
     if let Some(QEntry::Done(v)) = store.map.get_mut(path) {
-        spectrogram_card(ui, v);
+        spectrogram_card(ui, v, cut);
     }
 }
 
@@ -386,20 +392,48 @@ fn nice_step(range: f32, max_ticks: f32, steps: &[f32]) -> f32 {
         .unwrap_or(*steps.last().unwrap())
 }
 
-fn spectrogram_card(ui: &mut egui::Ui, v: &mut QView) {
+/// Tab names: the mix, then each channel, with stereo sides named.
+fn layer_names(n: usize) -> Vec<String> {
+    (0..n)
+        .map(|l| match (l, n) {
+            (0, 1) => "Mono".to_string(),
+            (0, 3) => "Mix (Stereo)".to_string(),
+            (0, _) => "Mix".to_string(),
+            (1, 3) => "Ch 1 (Left)".to_string(),
+            (2, 3) => "Ch 2 (Right)".to_string(),
+            _ => format!("Ch {l}"),
+        })
+        .collect()
+}
+
+fn mmss(t: f32) -> String {
+    let t = t.max(0.0);
+    format!("{:02}:{:05.2}", (t / 60.0) as u32, t % 60.0)
+}
+
+/// Horizontal dashed line across `area` at `y` with a boxed label.
+fn hline(p: &egui::Painter, area: Rect, y: f32, text: String, color: Color32) {
+    p.add(egui::Shape::dashed_line(
+        &[Pos2::new(area.left(), y), Pos2::new(area.right(), y)],
+        Stroke::new(1.0, color),
+        4.0,
+        3.0,
+    ));
+    let galley = p.layout_no_wrap(text, FontId::monospace(11.5), color);
+    let size = galley.size() + Vec2::new(10.0, 4.0);
+    let top = (y - size.y - 3.0).max(area.top() + 2.0);
+    let r = Rect::from_min_size(Pos2::new(area.right() - size.x - 6.0, top), size);
+    p.rect_filled(r, CornerRadius::same(2), alpha(LOWEST, 225));
+    p.galley(r.min + Vec2::new(5.0, 2.0), galley, color);
+}
+
+fn spectrogram_card(ui: &mut egui::Ui, v: &mut QView, cut: Option<&Cutoff>) {
     card().show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
             card_title(ui, "▦", "Spectrogram");
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let n = v.q.spectrogram.layers.len();
-                let names: Vec<String> = (0..n)
-                    .map(|l| match (l, n) {
-                        (0, 1) => "Mono".to_string(),
-                        (0, _) => "Mix".to_string(),
-                        _ => format!("Ch {l}"),
-                    })
-                    .collect();
+                let names = layer_names(v.q.spectrogram.layers.len());
                 segmented(ui, &names, &mut v.layer);
                 ui.add_space(12.0);
                 let sr = v.q.spectrogram.sample_rate.max(1) as f32;
@@ -416,6 +450,10 @@ fn spectrogram_card(ui: &mut egui::Ui, v: &mut QView) {
             });
         });
         ui.add_space(4.0);
+
+        // Readout row, filled in once the hover position is known.
+        let (readout, _) =
+            ui.allocate_exact_size(Vec2::new(ui.available_width(), 18.0), Sense::hover());
 
         let layer = v.layer.min(v.q.spectrogram.layers.len() - 1);
         if v.textures[layer].is_none() {
@@ -493,6 +531,81 @@ fn spectrogram_card(ui: &mut egui::Ui, v: &mut QView) {
             t += tstep;
         }
 
+        // Band markers.
+        let y_of = |hz: f32| area.bottom() - (hz / nyq).clamp(0.0, 1.0) * area.height();
+        hline(
+            &painter,
+            area,
+            area.top() + 1.0,
+            format!("Nyquist {} kHz", khz(nyq)),
+            TEXT_DIM,
+        );
+        if let Some(c) = cut {
+            hline(
+                &painter,
+                area,
+                y_of(c.bandwidth_hz),
+                format!("content ends {} kHz", khz(c.bandwidth_hz)),
+                AMBER,
+            );
+        }
+
+        // Hover crosshair and readout.
+        let rp = ui.painter();
+        let mut x = readout.left();
+        let mut field = |label: &str, value: String, color: Color32| {
+            let g = rp.layout_no_wrap(format!("{label} "), FontId::monospace(12.0), TEXT_DIM);
+            let w = g.size().x;
+            rp.galley(Pos2::new(x, readout.top()), g, TEXT_DIM);
+            x += w;
+            let g = rp.layout_no_wrap(
+                value,
+                FontId::new(12.0, egui::FontFamily::Name("mono-bold".into())),
+                color,
+            );
+            let w = g.size().x;
+            rp.galley(Pos2::new(x, readout.top()), g, color);
+            x += w + 22.0;
+        };
+        if let Some(c) = cut {
+            field(
+                "CUTOFF DELTA",
+                format!("-{} kHz vs Nyquist", khz(nyq - c.bandwidth_hz)),
+                GREEN,
+            );
+        }
+        match resp.hover_pos().filter(|p| area.contains(*p)) {
+            Some(p) => {
+                let fx = ((p.x - area.left()) / area.width()).clamp(0.0, 1.0);
+                let fy = ((area.bottom() - p.y) / area.height()).clamp(0.0, 1.0);
+                let col = ((fx * s.cols as f32) as usize).min(s.cols - 1);
+                let row = ((fy * s.rows as f32) as usize).min(s.rows - 1);
+                let byte = s.layers[layer][col * s.rows + row] as f32;
+                let db = SPEC_DB_MIN * (1.0 - byte / 255.0);
+                let cross = Stroke::new(1.0, alpha(Color32::WHITE, 90));
+                painter.line_segment(
+                    [Pos2::new(p.x, area.top()), Pos2::new(p.x, area.bottom())],
+                    cross,
+                );
+                painter.line_segment(
+                    [Pos2::new(area.left(), p.y), Pos2::new(area.right(), p.y)],
+                    cross,
+                );
+                field("TIME", mmss(fx * dur), ACCENT);
+                field(
+                    "FREQUENCY",
+                    format!("{:.0} Hz", fy * nyq),
+                    ui.visuals().strong_text_color(),
+                );
+                field("LEVEL", format!("{db:.1} dBFS"), AMBER);
+            }
+            None => field(
+                "",
+                "Hover the spectrogram to read time, frequency and level".into(),
+                TEXT_DIM,
+            ),
+        }
+
         // Colour scale.
         let bar = Rect::from_min_max(
             Pos2::new(area.left() + 56.0, full.bottom() - 16.0),
@@ -528,5 +641,19 @@ fn spectrogram_card(ui: &mut egui::Ui, v: &mut QView) {
             font,
             TEXT_DIM,
         );
+
+        // Analysis facts.
+        ui.add_space(2.0);
+        let mut facts = Vec::new();
+        if let Some(c) = cut {
+            facts.push(format!("Noise floor: {:.1} dB", c.floor_db));
+        }
+        facts.push(format!("Resolution: {} bins", s.rows));
+        if s.cols > 0 {
+            facts.push(format!("Hop: {:.0} ms", dur / s.cols as f32 * 1000.0));
+        }
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            ui.label(mono(facts.join("  ·  "), 12.0).color(TEXT_DIM));
+        });
     });
 }

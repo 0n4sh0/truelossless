@@ -192,7 +192,7 @@ pub fn spectrum_plot(ui: &mut egui::Ui, spec: &Spectrum, cut: &Cutoff) {
 }
 
 /// Kilohertz with up to two decimals and no trailing zeros.
-fn khz(hz: f32) -> String {
+pub fn khz(hz: f32) -> String {
     let s = format!("{:.2}", hz / 1000.0);
     s.trim_end_matches('0').trim_end_matches('.').to_owned()
 }

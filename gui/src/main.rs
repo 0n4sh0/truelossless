@@ -1005,19 +1005,18 @@ fn report_view(ui: &mut egui::Ui, slot: &Slot, r: &FileReport, quality: &mut Qua
                     },
                     |ui| {
                         // Centre the tags on the two-line title block.
-                        ui.allocate_ui_with_layout(
-                            egui::vec2(ui.available_width(), 46.0),
-                            Layout::right_to_left(Align::Center),
-                            |ui| {
+                        ui.vertical(|ui| {
+                            ui.add_space(13.0);
+                            ui.horizontal(|ui| {
                                 ui.spacing_mut().item_spacing.x = 6.0;
+                                style::badge(ui, &i.codec.to_uppercase(), ACCENT);
                                 if i.lossless {
                                     style::badge(ui, "LOSSLESS", GREEN);
                                 } else {
                                     style::badge(ui, "LOSSY", status_color(Status::Lossy));
                                 }
-                                style::badge(ui, &i.codec.to_uppercase(), ACCENT);
-                            },
-                        );
+                            });
+                        });
                     },
                 );
 
@@ -1030,7 +1029,7 @@ fn report_view(ui: &mut egui::Ui, slot: &Slot, r: &FileReport, quality: &mut Qua
                     .inner_margin(Margin::same(12))
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
-                        egui::Sides::new().show(
+                        egui::Sides::new().shrink_left().wrap().show(
                             ui,
                             |ui| {
                                 let (icon, _) =
@@ -1221,7 +1220,12 @@ fn report_view(ui: &mut egui::Ui, slot: &Slot, r: &FileReport, quality: &mut Qua
                 });
             }
 
-            quality_view::show_spectrogram(ui, quality, &slot.path);
+            quality_view::show_spectrogram(
+                ui,
+                quality,
+                &slot.path,
+                r.analysis.as_ref().map(|a| &a.cutoff),
+            );
 
             card().show(ui, |ui| {
                 ui.set_width(ui.available_width());
