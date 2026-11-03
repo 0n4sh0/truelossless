@@ -5,8 +5,18 @@ use rayon::prelude::*;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
+use truelossless_core::cache::ScanCache;
 use truelossless_core::{check_file, find_audio_files, CheckOptions, FileReport};
+
+/// Results of earlier scans, loaded on first use and shared by all scans.
+fn cache() -> &'static Mutex<ScanCache> {
+    static CACHE: OnceLock<Mutex<ScanCache>> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        let loaded = crate::settings::cache_file().map(|f| ScanCache::load(&f));
+        Mutex::new(loaded.unwrap_or_default())
+    })
+}
 
 // Only a few messages are in flight at a time, so the size gap is harmless.
 #[allow(clippy::large_enum_variant)]
@@ -55,11 +65,23 @@ pub fn start_scan(root: PathBuf, opts: CheckOptions, ctx: egui::Context) -> Scan
                 if flag.load(Ordering::Relaxed) {
                     return;
                 }
-                let result = check_file(path, opts).map_err(|e| e.to_string());
+                let cached = cache().lock().ok().and_then(|c| c.get(path, opts));
+                let result = cached.unwrap_or_else(|| {
+                    let r = check_file(path, opts).map_err(|e| e.to_string());
+                    // Read errors may be passing (a locked file), so only
+                    // successful checks are kept.
+                    if let (Ok(report), Ok(mut c)) = (&r, cache().lock()) {
+                        c.insert(path, opts, Ok(report.clone()));
+                    }
+                    r
+                });
                 let _ = tx.send(Msg::Done(i, result));
                 ctx.request_repaint();
             });
 
+        if let (Some(file), Ok(mut c)) = (crate::settings::cache_file(), cache().lock()) {
+            let _ = c.save(&file);
+        }
         let _ = tx.send(Msg::Finished);
         ctx.request_repaint();
     });

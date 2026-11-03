@@ -67,6 +67,11 @@ fn render(s: &Settings) -> String {
     out
 }
 
+/// Where finished checks are cached between runs.
+pub fn cache_file() -> Option<PathBuf> {
+    config_dir().map(|d| d.join("scan-cache.bin"))
+}
+
 fn config_dir() -> Option<PathBuf> {
     let var = |n: &str| std::env::var_os(n).map(PathBuf::from);
     let base = if cfg!(windows) {

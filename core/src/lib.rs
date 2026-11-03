@@ -2,6 +2,7 @@
 //! their spectrum.
 
 pub mod analyze;
+pub mod cache;
 pub mod check;
 pub mod csv;
 pub mod cutoff;
