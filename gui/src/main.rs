@@ -1095,16 +1095,17 @@ fn report_view(ui: &mut egui::Ui, slot: &Slot, r: &FileReport, quality: &mut Qua
                     },
                     |ui| {
                         // Centre the tags on the two-line title block.
-                        ui.vertical(|ui| {
+                        ui.with_layout(Layout::top_down(Align::Max), |ui| {
                             ui.add_space(13.0);
-                            ui.horizontal(|ui| {
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                 ui.spacing_mut().item_spacing.x = 6.0;
-                                style::badge(ui, &i.codec.to_uppercase(), ACCENT);
+                                // Right to left: the last tag added sits leftmost.
                                 if i.lossless {
                                     style::badge(ui, "LOSSLESS", GREEN);
                                 } else {
                                     style::badge(ui, "LOSSY", status_color(Status::Lossy));
                                 }
+                                style::badge(ui, &i.codec.to_uppercase(), ACCENT);
                             });
                         });
                     },
