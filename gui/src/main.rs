@@ -392,33 +392,49 @@ impl App {
                 self.export_csv();
             }
         });
+    }
 
+    /// Scan and measuring-ahead progress for the footer, drawn right to left.
+    fn progress(&mut self, ui: &mut egui::Ui) {
+        use style::{icon_click, Icon};
+        // Right to left: the count, then the ring before it.
+        let bar = |ui: &mut egui::Ui, frac: f32, text: String| {
+            ui.label(style::mono(text, 13.0).color(style::TEXT));
+            ui.add_space(-2.0);
+            ui.ctx().request_repaint_after(Duration::from_millis(250));
+            style::progress_ring(ui, frac)
+        };
         if self.scanning() {
-            let total = self.slots.len().max(1);
-            ui.add(
-                egui::ProgressBar::new(self.done as f32 / total as f32)
-                    .text(style::mono(
-                        format!("Checking {} / {}", self.done, self.slots.len()),
-                        11.0,
-                    ))
-                    .fill(ACCENT)
-                    .desired_height(14.0)
-                    .corner_radius(CornerRadius::same(4)),
-            );
+            if icon_click(ui, Icon::Close, "Stop scanning") {
+                self.stop();
+            }
+            let total = self.slots.len();
+            bar(
+                ui,
+                self.done as f32 / total.max(1) as f32,
+                format!("Checking {} / {total}", self.done),
+            )
+            .on_hover_text("Checking files");
         } else if self.quality.background_left() > 0 {
-            ui.horizontal(|ui| {
-                style::dot(ui, ACCENT);
-                ui.label(
-                    style::mono(
-                        format!(
-                            "Measuring audio quality ahead · {} left",
-                            self.quality.background_left()
-                        ),
-                        11.5,
-                    )
-                    .color(TEXT_DIM),
-                );
-            });
+            if icon_click(ui, Icon::Close, "Cancel all: stop measuring ahead") {
+                self.stop();
+            }
+            if icon_click(ui, Icon::Skip, "Cancel current: skip to the next file") {
+                self.quality.cancel_current();
+            }
+            let (done, total) = self.quality.background_progress();
+            let name = self
+                .quality
+                .background_current()
+                .and_then(|p| p.file_name())
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            bar(
+                ui,
+                done as f32 / total.max(1) as f32,
+                format!("Quality {} / {total}", done + 1),
+            )
+            .on_hover_text(format!("Measuring audio quality ahead: {name}"));
         }
     }
 
@@ -463,6 +479,8 @@ impl App {
                 if link(ui, "⚙ Settings") {
                     self.settings_open = true;
                 }
+                ui.add_space(12.0);
+                self.progress(ui);
                 if let Some((msg, _)) = &self.notice {
                     ui.label(style::mono(msg, 11.0).color(TEXT_DIM));
                     ui.ctx().request_repaint_after(Duration::from_secs(1));
@@ -645,11 +663,8 @@ impl App {
                 ui.label(style::heading("Queue", 18.0).color(ui.visuals().strong_text_color()));
                 style::badge(ui, &format!("{} FILES", self.slots.len()), ACCENT);
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if self.scan.is_some() || self.quality.background_left() > 0 {
-                        if style::icon_click(ui, Icon::Close, "Stop scanning") {
-                            self.stop();
-                        }
-                    } else if let Some(root) = self.root.clone() {
+                    // Stopping lives in the footer, next to the progress.
+                    if let (false, Some(root)) = (self.scanning(), self.root.clone()) {
                         if style::icon_click(ui, Icon::Sync, "Rescan folder") {
                             self.start(root, &ctx);
                         }
@@ -1471,8 +1486,8 @@ impl eframe::App for App {
             .frame(egui::Frame::new().fill(BG).inner_margin(Margin {
                 left: 4,
                 right: 20,
-                top: 12,
-                bottom: 12,
+                top: 8,
+                bottom: 8,
             }))
             .show(ui, |ui| self.details(ui));
 

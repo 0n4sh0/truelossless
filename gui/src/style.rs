@@ -363,6 +363,7 @@ pub enum Icon {
     Close,
     Search,
     Sync,
+    Skip,
 }
 
 /// Draw `icon` in a 14 px box centred on `c`.
@@ -452,7 +453,37 @@ pub fn paint_icon(p: &egui::Painter, c: egui::Pos2, icon: Icon, color: Color32) 
             p.line_segment([at(-5.0, -5.0), at(5.0, 5.0)], s);
             p.line_segment([at(-5.0, 5.0), at(5.0, -5.0)], s);
         }
+        Icon::Skip => {
+            // A play triangle up against a bar: "next".
+            p.add(egui::Shape::convex_polygon(
+                vec![at(-5.0, -5.0), at(3.0, 0.0), at(-5.0, 5.0)],
+                color,
+                Stroke::NONE,
+            ));
+            p.line_segment([at(4.5, -5.0), at(4.5, 5.0)], s);
+        }
     }
+}
+
+/// A small ring that fills clockwise from the top as `frac` goes 0 to 1.
+pub fn progress_ring(ui: &mut Ui, frac: f32) -> egui::Response {
+    let (r, resp) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
+    let (c, radius) = (r.center(), 7.0);
+    let p = ui.painter();
+    p.circle_stroke(c, radius, Stroke::new(2.5, HIGH));
+    let frac = frac.clamp(0.0, 1.0);
+    if frac > 0.0 {
+        let steps = ((frac * 48.0).ceil() as usize).max(2);
+        let pts: Vec<egui::Pos2> = (0..=steps)
+            .map(|k| {
+                let a = -std::f32::consts::FRAC_PI_2
+                    + std::f32::consts::TAU * frac * k as f32 / steps as f32;
+                c + radius * egui::vec2(a.cos(), a.sin())
+            })
+            .collect();
+        p.add(egui::Shape::line(pts, Stroke::new(2.5, ACCENT)));
+    }
+    resp
 }
 
 /// The app mark: five waveform bars.

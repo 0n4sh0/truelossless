@@ -10,13 +10,16 @@ use eframe::egui::{
     self, Align, Align2, Color32, ColorImage, CornerRadius, FontId, Layout, Pos2, Rect, RichText,
     Sense, Stroke, TextureHandle, TextureOptions, Vec2,
 };
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::Arc;
 use truelossless_core::cache;
-use truelossless_core::quality::{SPEC_DB_MIN, SPEC_WIN};
+use truelossless_core::quality::{cancelled, SPEC_DB_MIN, SPEC_WIN};
 use truelossless_core::{
-    analyze_quality_with, Cutoff, DecoderMode, FileReport, Quality, QualityOptions, Toolchain,
+    analyze_quality_cancellable, Cutoff, DecoderMode, FileReport, Quality, QualityOptions,
+    Toolchain,
 };
 
 const KEEP: usize = 8;
@@ -45,8 +48,16 @@ pub struct QualityStore {
     map: HashMap<PathBuf, QEntry>,
     order: Vec<PathBuf>,
     running: Option<PathBuf>,
+    /// Set to stop the on-screen job early.
+    fg_cancel: Arc<AtomicBool>,
+    /// Files the user chose not to measure; they wait for "Measure now".
+    skipped: HashSet<PathBuf>,
     queue: VecDeque<Pending>,
     bg_current: Option<PathBuf>,
+    /// Set to stop the background job early.
+    bg_cancel: Arc<AtomicBool>,
+    /// Files queued in this round, for the progress bar.
+    bg_total: usize,
     bg_tx: Sender<()>,
     bg_rx: Receiver<()>,
     ffmpeg: Option<Toolchain>,
@@ -63,8 +74,12 @@ impl Default for QualityStore {
             map: HashMap::new(),
             order: Vec::new(),
             running: None,
+            fg_cancel: Arc::new(AtomicBool::new(false)),
+            skipped: HashSet::new(),
             queue: VecDeque::new(),
             bg_current: None,
+            bg_cancel: Arc::new(AtomicBool::new(false)),
+            bg_total: 0,
             bg_tx,
             bg_rx,
             ffmpeg: None,
@@ -83,16 +98,50 @@ impl QualityStore {
             .into_iter()
             .filter(|f| !(f.header_only && unsupported))
             .collect();
+        self.bg_total = self.queue.len();
     }
 
-    /// Stop measuring ahead. The file being measured finishes.
+    /// Stop the file being measured ahead; the queue moves on to the next.
+    pub fn cancel_current(&mut self) {
+        self.bg_cancel.store(true, Ordering::Relaxed);
+    }
+
+    /// Stop measuring ahead altogether, including the current file.
     pub fn stop_background(&mut self) {
         self.queue.clear();
+        self.cancel_current();
     }
 
     /// Files still to measure in the background, counting the current one.
     pub fn background_left(&self) -> usize {
         self.queue.len() + self.bg_current.is_some() as usize
+    }
+
+    /// Stop measuring `path` and leave it unmeasured until asked again.
+    pub fn skip(&mut self, path: &Path) {
+        self.skipped.insert(path.to_path_buf());
+        if self.running.as_deref() == Some(path) {
+            self.fg_cancel.store(true, Ordering::Relaxed);
+        }
+        if self.bg_current.as_deref() == Some(path) {
+            self.cancel_current();
+        }
+    }
+
+    /// Measure a skipped file after all.
+    pub fn unskip(&mut self, path: &Path) {
+        self.skipped.remove(path);
+    }
+
+    /// Files measured (or skipped) so far, and the round's total.
+    pub fn background_progress(&self) -> (usize, usize) {
+        let total = self.bg_total.max(self.background_left());
+        (total - self.background_left(), total)
+    }
+
+    /// The file being measured ahead right now.
+    pub fn background_current(&self) -> Option<&Path> {
+        self.bg_current.as_deref()
     }
 
     /// Drop everything known about `path`, in memory and on disk.
@@ -121,6 +170,8 @@ impl QualityStore {
                 continue;
             }
             self.bg_current = Some(f.path.clone());
+            self.bg_cancel = Arc::new(AtomicBool::new(false));
+            let cancel = self.bg_cancel.clone();
             let (tx, ctx, ffmpeg) = (self.bg_tx.clone(), ctx.clone(), self.ffmpeg.clone());
             let opts = QualityOptions {
                 mode: self.mode,
@@ -128,7 +179,8 @@ impl QualityStore {
                 duration_hint: f.hint,
             };
             std::thread::spawn(move || {
-                if let Ok(q) = analyze_quality_with(&f.path, ffmpeg.as_ref(), opts) {
+                let res = analyze_quality_cancellable(&f.path, ffmpeg.as_ref(), opts, &cancel);
+                if let Ok(q) = res {
                     let _ = cache::save_quality(&dir, &f.path, opts.mode, &q);
                 }
                 let _ = tx.send(());
@@ -142,9 +194,13 @@ impl QualityStore {
     /// every frame.
     pub fn poll(&mut self, ctx: &egui::Context) {
         self.pump_background(ctx);
+        let stopped = cancelled().to_string();
         while let Ok((path, res)) = self.rx.try_recv() {
             if self.running.as_ref() == Some(&path) {
                 self.running = None;
+            }
+            if matches!(&res, Err(e) if *e == stopped) {
+                continue;
             }
             let entry = match res {
                 Ok(q) => QEntry::Done(Box::new(QView {
@@ -189,11 +245,14 @@ impl QualityStore {
         // cache once that job ends.
         if self.map.contains_key(path)
             || self.running.is_some()
+            || self.skipped.contains(path)
             || self.bg_current.as_deref() == Some(path)
         {
             return;
         }
         self.running = Some(path.to_path_buf());
+        self.fg_cancel = Arc::new(AtomicBool::new(false));
+        let cancel = self.fg_cancel.clone();
         let (tx, ctx, p) = (self.tx.clone(), ctx.clone(), path.to_path_buf());
         let ffmpeg = self.ffmpeg.clone();
         let opts = QualityOptions {
@@ -209,8 +268,8 @@ impl QualityStore {
             let res = match cached {
                 Some(q) => Ok(q),
                 None => {
-                    let res =
-                        analyze_quality_with(&p, ffmpeg.as_ref(), opts).map_err(|e| e.to_string());
+                    let res = analyze_quality_cancellable(&p, ffmpeg.as_ref(), opts, &cancel)
+                        .map_err(|e| e.to_string());
                     if let (Some(d), Ok(q)) = (&dir, &res) {
                         let _ = cache::save_quality(d, &p, opts.mode, q);
                     }
@@ -244,13 +303,36 @@ pub fn show_stats(ui: &mut egui::Ui, store: &mut QualityStore, path: &Path, r: &
         });
         return;
     }
+    if store.skipped.contains(path) {
+        card().show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Audio quality was not measured.").color(TEXT_DIM));
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if ui.button("Measure now").clicked() {
+                        store.unskip(path);
+                    }
+                });
+            });
+        });
+        return;
+    }
     store.ensure(path, ui.ctx(), header_only, r.info.duration_secs);
     let Some(entry) = store.map.get(path) else {
         card().show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
-                ui.spinner();
+                ui.add(egui::Spinner::new().size(16.0).color(ACCENT));
                 ui.label(RichText::new("Measuring audio quality…").color(TEXT_DIM));
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if crate::style::icon_click(
+                        ui,
+                        crate::style::Icon::Skip,
+                        "Skip measuring this file",
+                    ) {
+                        store.skip(path);
+                    }
+                });
             });
         });
         return;
