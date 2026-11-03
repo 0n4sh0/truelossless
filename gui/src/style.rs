@@ -173,6 +173,16 @@ pub fn card_title(ui: &mut Ui, icon: &str, text: &str) {
     });
 }
 
+/// Like [`card_title`], with a painted icon.
+pub fn card_title_icon(ui: &mut Ui, icon: Icon, text: &str) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 6.0;
+        let (r, _) = ui.allocate_exact_size(egui::vec2(17.0, 17.0), egui::Sense::hover());
+        paint_icon(ui.painter(), r.center(), icon, ACCENT);
+        ui.label(heading(text, 19.0));
+    });
+}
+
 /// Square-cornered tag such as "GENUINE" or "6 FILES".
 pub fn badge(ui: &mut Ui, text: &str, color: Color32) {
     let w = ui
@@ -364,6 +374,7 @@ pub enum Icon {
     Search,
     Sync,
     Skip,
+    Heatmap,
 }
 
 /// Draw `icon` in a 14 px box centred on `c`.
@@ -452,6 +463,26 @@ pub fn paint_icon(p: &egui::Painter, c: egui::Pos2, icon: Icon, color: Color32) 
         Icon::Close => {
             p.line_segment([at(-5.0, -5.0), at(5.0, 5.0)], s);
             p.line_segment([at(-5.0, 5.0), at(5.0, -5.0)], s);
+        }
+        Icon::Heatmap => {
+            // A 4x4 grid of cells, brighter towards the bottom left, like
+            // a spectrogram.
+            const LEVELS: [[u8; 4]; 4] = [
+                [60, 30, 20, 10],
+                [130, 80, 40, 20],
+                [200, 150, 90, 40],
+                [255, 220, 160, 90],
+            ];
+            for (row, cells) in LEVELS.iter().enumerate() {
+                for (col, &a) in cells.iter().enumerate() {
+                    let min = at(-6.0 + col as f32 * 3.0, -6.0 + row as f32 * 3.0);
+                    p.rect_filled(
+                        egui::Rect::from_min_size(min, egui::vec2(2.5, 2.5)),
+                        0.0,
+                        alpha(color, a),
+                    );
+                }
+            }
         }
         Icon::Skip => {
             // A play triangle up against a bar: "next".

@@ -638,7 +638,7 @@ fn spectrogram_card(ui: &mut egui::Ui, v: &mut QView, cut: Option<&Cutoff>) {
     card().show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
-            card_title(ui, "▦", "Spectrogram");
+            crate::style::card_title_icon(ui, crate::style::Icon::Heatmap, "Spectrogram");
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let names = layer_names(v.q.spectrogram.layers.len());
                 segmented(ui, &names, &mut v.layer);
