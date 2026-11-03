@@ -46,6 +46,32 @@ impl Drop for ScanHandle {
     }
 }
 
+/// Check one file again, ignoring and replacing its cached result.
+pub fn recheck(
+    path: PathBuf,
+    opts: CheckOptions,
+    ctx: egui::Context,
+) -> Receiver<(PathBuf, Result<FileReport, String>)> {
+    let (tx, rx) = channel();
+    std::thread::spawn(move || {
+        if let Ok(mut c) = cache().lock() {
+            c.remove(&path);
+        }
+        let r = check_file(&path, opts).map_err(|e| e.to_string());
+        if let Ok(mut c) = cache().lock() {
+            if let Ok(report) = &r {
+                c.insert(&path, opts, Ok(report.clone()));
+            }
+            if let Some(file) = crate::settings::cache_file() {
+                let _ = c.save(&file);
+            }
+        }
+        let _ = tx.send((path, r));
+        ctx.request_repaint();
+    });
+    rx
+}
+
 pub fn start_scan(root: PathBuf, opts: CheckOptions, ctx: egui::Context) -> ScanHandle {
     let (tx, rx) = channel();
     let cancel = Arc::new(AtomicBool::new(false));

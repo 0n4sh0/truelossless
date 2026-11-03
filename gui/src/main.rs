@@ -25,7 +25,7 @@ use style::{alpha, card, chip_right, tinted_card, ACCENT, BG, GREEN, LOWEST, PAN
 use truelossless_core::{
     csv_line, verdict, CheckOptions, DecoderMode, FileReport, Md5Status, Status, CSV_HEADER,
 };
-use worker::{start_scan, Msg, ScanHandle};
+use worker::{recheck, start_scan, Msg, ScanHandle};
 
 fn main() -> eframe::Result {
     // Optional first argument: a folder or file to scan on start-up.
@@ -68,6 +68,9 @@ struct App {
     slots: Vec<Slot>,
     done: usize,
     scan: Option<ScanHandle>,
+    /// The scan was stopped, so nothing is measured ahead.
+    stopped: bool,
+    rechecks: Vec<std::sync::mpsc::Receiver<(PathBuf, Result<FileReport, String>)>>,
     selected: Option<usize>,
     scroll_to_selected: bool,
     filter: Option<Filter>,
@@ -105,6 +108,8 @@ impl App {
         self.root = Some(root);
         self.slots.clear();
         self.quality.clear();
+        self.quality.stop_background();
+        self.stopped = false;
         self.selected = None;
         self.done = 0;
     }
@@ -123,7 +128,65 @@ impl App {
         }
     }
 
+    fn check_options(&self) -> CheckOptions {
+        CheckOptions {
+            analyze: true,
+            verify_md5: self.verify_md5,
+        }
+    }
+
+    /// Check one file again from scratch.
+    fn rescan_file(&mut self, i: usize, ctx: &egui::Context) {
+        let Some(slot) = self.slots.get_mut(i) else {
+            return;
+        };
+        slot.result = None;
+        let path = slot.path.clone();
+        self.quality.forget(&path);
+        self.rechecks
+            .push(recheck(path, self.check_options(), ctx.clone()));
+    }
+
+    /// Stop the scan and any measuring ahead.
+    fn stop(&mut self) {
+        if let Some(h) = &self.scan {
+            h.cancel();
+        }
+        self.stopped = true;
+        self.quality.stop_background();
+    }
+
+    /// Queue every checked, lossless file for measuring ahead.
+    fn measure_ahead(&mut self) {
+        let files = self
+            .slots
+            .iter()
+            .filter_map(|s| match &s.result {
+                Some(Ok(r)) if r.info.lossless => Some(quality_view::Pending {
+                    path: s.path.clone(),
+                    header_only: r.info.header_only.is_some(),
+                    hint: r.info.duration_secs,
+                }),
+                _ => None,
+            })
+            .collect();
+        self.quality.queue_background(files);
+    }
+
     fn pump_messages(&mut self) {
+        let mut finished = Vec::new();
+        self.rechecks.retain(|rx| match rx.try_recv() {
+            Ok(done) => {
+                finished.push(done);
+                false
+            }
+            Err(e) => e == std::sync::mpsc::TryRecvError::Empty,
+        });
+        for (path, result) in finished {
+            if let Some(slot) = self.slots.iter_mut().find(|s| s.path == path) {
+                slot.result = Some(result);
+            }
+        }
         let msgs: Vec<Msg> = match &self.scan {
             Some(h) => h.rx.try_iter().collect(),
             None => return,
@@ -148,6 +211,9 @@ impl App {
                 }
                 Msg::Finished => {
                     self.scan = None;
+                    if !self.stopped {
+                        self.measure_ahead();
+                    }
                     if self.selected.is_none() {
                         self.selected = self.first_visible();
                     }
@@ -339,6 +405,20 @@ impl App {
                     .desired_height(14.0)
                     .corner_radius(CornerRadius::same(4)),
             );
+        } else if self.quality.background_left() > 0 {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(
+                    style::mono(
+                        format!(
+                            "Measuring audio quality ahead · {} left",
+                            self.quality.background_left()
+                        ),
+                        11.5,
+                    )
+                    .color(TEXT_DIM),
+                );
+            });
         }
     }
 
@@ -565,9 +645,9 @@ impl App {
                 ui.label(style::heading("Queue", 18.0).color(ui.visuals().strong_text_color()));
                 style::badge(ui, &format!("{} FILES", self.slots.len()), ACCENT);
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if let Some(h) = &self.scan {
+                    if self.scan.is_some() || self.quality.background_left() > 0 {
                         if style::icon_click(ui, Icon::Close, "Stop scanning") {
-                            h.cancel();
+                            self.stop();
                         }
                     } else if let Some(root) = self.root.clone() {
                         if style::icon_click(ui, Icon::Sync, "Rescan folder") {
@@ -670,6 +750,7 @@ impl App {
             .collect();
         let total: f32 = heights.iter().sum();
         let scroll_to = std::mem::take(&mut self.scroll_to_selected);
+        let mut rescan = None;
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show_viewport(ui, |ui, viewport| {
@@ -692,9 +773,18 @@ impl App {
                         self.selected = Some(i);
                     }
                     self.paint_row(ui, i, rect, selected, resp.hovered());
+                    resp.context_menu(|ui| {
+                        if ui.button("Rescan this file").clicked() {
+                            rescan = Some(i);
+                            ui.close();
+                        }
+                    });
                     resp.on_hover_text(self.slots[i].name.clone());
                 }
             });
+        if let Some(i) = rescan {
+            self.rescan_file(i, &ui.ctx().clone());
+        }
     }
 
     fn paint_row(&self, ui: &egui::Ui, i: usize, rect: egui::Rect, selected: bool, hovered: bool) {
@@ -1337,7 +1427,7 @@ impl eframe::App for App {
             self.start(path, &ctx);
         }
         self.pump_messages();
-        self.quality.poll();
+        self.quality.poll(&ctx);
         self.handle_drop(&ctx);
         self.handle_keys(&ctx);
 

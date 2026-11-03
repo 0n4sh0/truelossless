@@ -10,7 +10,7 @@ use eframe::egui::{
     self, Align, Align2, Color32, ColorImage, CornerRadius, FontId, Layout, Pos2, Rect, RichText,
     Sense, Stroke, TextureHandle, TextureOptions, Vec2,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use truelossless_core::cache;
@@ -32,11 +32,23 @@ pub enum QEntry {
     Failed(String),
 }
 
-/// Results of quality analyses, one background job at a time.
+/// A file waiting to be measured ahead of time.
+pub struct Pending {
+    pub path: PathBuf,
+    pub header_only: bool,
+    pub hint: Option<f64>,
+}
+
+/// Results of quality analyses: one job for the file on screen, plus one
+/// background job that measures the rest of the scan into the disk cache.
 pub struct QualityStore {
     map: HashMap<PathBuf, QEntry>,
     order: Vec<PathBuf>,
     running: Option<PathBuf>,
+    queue: VecDeque<Pending>,
+    bg_current: Option<PathBuf>,
+    bg_tx: Sender<()>,
+    bg_rx: Receiver<()>,
     ffmpeg: Option<Toolchain>,
     mode: DecoderMode,
     tx: Sender<(PathBuf, Result<Quality, String>)>,
@@ -46,10 +58,15 @@ pub struct QualityStore {
 impl Default for QualityStore {
     fn default() -> Self {
         let (tx, rx) = channel();
+        let (bg_tx, bg_rx) = channel();
         QualityStore {
             map: HashMap::new(),
             order: Vec::new(),
             running: None,
+            queue: VecDeque::new(),
+            bg_current: None,
+            bg_tx,
+            bg_rx,
             ffmpeg: None,
             mode: DecoderMode::Auto,
             tx,
@@ -59,8 +76,72 @@ impl Default for QualityStore {
 }
 
 impl QualityStore {
-    /// Collect finished jobs. Call every frame.
-    pub fn poll(&mut self) {
+    /// Measure these files in the background, one at a time.
+    pub fn queue_background(&mut self, files: Vec<Pending>) {
+        let unsupported = !self.can_decode_unsupported();
+        self.queue = files
+            .into_iter()
+            .filter(|f| !(f.header_only && unsupported))
+            .collect();
+    }
+
+    /// Stop measuring ahead. The file being measured finishes.
+    pub fn stop_background(&mut self) {
+        self.queue.clear();
+    }
+
+    /// Files still to measure in the background, counting the current one.
+    pub fn background_left(&self) -> usize {
+        self.queue.len() + self.bg_current.is_some() as usize
+    }
+
+    /// Drop everything known about `path`, in memory and on disk.
+    pub fn forget(&mut self, path: &Path) {
+        self.map.remove(path);
+        self.order.retain(|p| p != path);
+        if let Some(d) = crate::settings::quality_dir() {
+            cache::forget_quality(&d, path);
+        }
+    }
+
+    /// Start the next background job when none is running.
+    fn pump_background(&mut self, ctx: &egui::Context) {
+        if self.bg_rx.try_recv().is_ok() {
+            self.bg_current = None;
+        }
+        if self.bg_current.is_some() {
+            return;
+        }
+        let Some(dir) = crate::settings::quality_dir() else {
+            self.queue.clear();
+            return;
+        };
+        while let Some(f) = self.queue.pop_front() {
+            if self.map.contains_key(&f.path) || cache::has_quality(&dir, &f.path, self.mode) {
+                continue;
+            }
+            self.bg_current = Some(f.path.clone());
+            let (tx, ctx, ffmpeg) = (self.bg_tx.clone(), ctx.clone(), self.ffmpeg.clone());
+            let opts = QualityOptions {
+                mode: self.mode,
+                header_only: f.header_only,
+                duration_hint: f.hint,
+            };
+            std::thread::spawn(move || {
+                if let Ok(q) = analyze_quality_with(&f.path, ffmpeg.as_ref(), opts) {
+                    let _ = cache::save_quality(&dir, &f.path, opts.mode, &q);
+                }
+                let _ = tx.send(());
+                ctx.request_repaint();
+            });
+            return;
+        }
+    }
+
+    /// Collect finished jobs and keep the background queue moving. Call
+    /// every frame.
+    pub fn poll(&mut self, ctx: &egui::Context) {
+        self.pump_background(ctx);
         while let Ok((path, res)) = self.rx.try_recv() {
             if self.running.as_ref() == Some(&path) {
                 self.running = None;
@@ -88,6 +169,7 @@ impl QualityStore {
         self.ffmpeg = ffmpeg;
         self.mode = mode;
         self.clear();
+        self.queue.clear();
     }
 
     /// True when a format the built-in decoders lack can be measured.
@@ -103,7 +185,12 @@ impl QualityStore {
         header_only: bool,
         hint: Option<f64>,
     ) {
-        if self.map.contains_key(path) || self.running.is_some() {
+        // A file the background job is measuring is picked up from the
+        // cache once that job ends.
+        if self.map.contains_key(path)
+            || self.running.is_some()
+            || self.bg_current.as_deref() == Some(path)
+        {
             return;
         }
         self.running = Some(path.to_path_buf());
