@@ -102,6 +102,13 @@ impl ScanCache {
         self.dirty = true;
     }
 
+    /// Drop the entry for `path`, so the next check runs again.
+    pub fn remove(&mut self, path: &Path) {
+        if self.entries.remove(path).is_some() {
+            self.dirty = true;
+        }
+    }
+
     pub fn len(&self) -> usize {
         self.entries.len()
     }
@@ -422,6 +429,27 @@ pub fn load_quality(dir: &Path, path: &Path, mode: DecoderMode) -> Option<Qualit
     read_quality(&mut R { b: rest, i: 0 })
 }
 
+/// True when a measurement of `path` made with `mode` is cached and current.
+/// Reads only the header.
+pub fn has_quality(dir: &Path, path: &Path, mode: DecoderMode) -> bool {
+    use std::io::Read;
+    let Some(st) = stamp(path) else {
+        return false;
+    };
+    let mut want = W::default();
+    quality_header(&mut want, path, st, mode);
+    let mut got = vec![0; want.0.len()];
+    std::fs::File::open(quality_file(dir, path))
+        .and_then(|mut f| f.read_exact(&mut got))
+        .is_ok()
+        && got == want.0
+}
+
+/// Delete any cached measurement of `path`.
+pub fn forget_quality(dir: &Path, path: &Path) {
+    let _ = std::fs::remove_file(quality_file(dir, path));
+}
+
 /// Store the measurement of `path` made with `mode`.
 pub fn save_quality(
     dir: &Path,
@@ -562,6 +590,7 @@ mod tests {
         };
         let qdir = dir.join("q");
         save_quality(&qdir, &audio, DecoderMode::Auto, &q).unwrap();
+        assert!(has_quality(&qdir, &audio, DecoderMode::Auto));
         let back = load_quality(&qdir, &audio, DecoderMode::Auto).unwrap();
         assert_eq!(back.spectrogram.layers, q.spectrogram.layers);
         assert_eq!(back.clipped, 3);
@@ -570,6 +599,10 @@ mod tests {
             load_quality(&qdir, &audio, DecoderMode::Native).is_none(),
             "other mode"
         );
+        assert!(!has_quality(&qdir, &audio, DecoderMode::Native));
+        forget_quality(&qdir, &audio);
+        assert!(!has_quality(&qdir, &audio, DecoderMode::Auto), "forgotten");
+        save_quality(&qdir, &audio, DecoderMode::Auto, &q).unwrap();
         std::fs::write(&audio, b"fLaC-changed").unwrap();
         assert!(
             load_quality(&qdir, &audio, DecoderMode::Auto).is_none(),
