@@ -202,7 +202,7 @@ fn stats_card(ui: &mut egui::Ui, q: &Quality, r: &FileReport) {
             card_title(ui, "📊", "Dynamics & levels");
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 5.0;
-                ui.label(mono(format!("Decoded with {}", q.decoder.name()), 10.5).color(TEXT_DIM));
+                ui.label(mono(format!("Decoded with {}", q.decoder.name()), 12.0).color(TEXT_DIM));
                 crate::style::dot(ui, GREEN);
             });
         });
@@ -276,7 +276,7 @@ fn stats_card(ui: &mut egui::Ui, q: &Quality, r: &FileReport) {
         ];
         ui.columns(tiles.len(), |cols| {
             for (col, s) in cols.iter_mut().zip(&tiles) {
-                stat_tile(col, s, LOWEST, 13.5);
+                stat_tile(col, s, LOWEST, 15.0);
             }
         });
 
@@ -301,17 +301,17 @@ fn stats_card(ui: &mut egui::Ui, q: &Quality, r: &FileReport) {
                                 (true, _) => "Ch 2 (Right):".to_string(),
                                 _ => format!("Ch {}:", n + 1),
                             };
-                            ui.label(mono_bold(name, 11.5).color(ACCENT));
+                            ui.label(mono_bold(name, 13.0).color(ACCENT));
                             for (k, v) in [
                                 ("Peak", format!("{:.1} dBFS", c.peak_db)),
                                 ("RMS", format!("{:.1} dB", c.rms_db)),
                                 ("DR", format!("{:.1}", c.dynamic_range_db)),
                             ] {
-                                ui.label(mono(k, 11.5).color(TEXT_DIM));
-                                ui.label(mono_bold(v, 11.5));
+                                ui.label(mono(k, 13.0).color(TEXT_DIM));
+                                ui.label(mono_bold(v, 13.0));
                             }
                             ui.label(
-                                mono(format!("Clips: {}", c.clipped), 11.5)
+                                mono(format!("Clips: {}", c.clipped), 13.0)
                                     .color(if c.clipped > 0 { AMBER } else { TEXT_DIM }),
                             );
                         }
@@ -332,7 +332,7 @@ fn stats_card(ui: &mut egui::Ui, q: &Quality, r: &FileReport) {
             note.push("5.1/7.1 bed only, Atmos objects are not included".into());
         }
         ui.add_space(4.0);
-        ui.label(mono(note.join(" · "), 10.5).color(TEXT_DIM));
+        ui.label(mono(note.join(" · "), 11.5).color(TEXT_DIM));
     });
 }
 
@@ -427,7 +427,7 @@ fn spectrogram_card(ui: &mut egui::Ui, v: &mut QView) {
             Color32::WHITE,
         );
 
-        let font = FontId::monospace(10.5);
+        let font = FontId::monospace(11.5);
         let grid = Stroke::new(1.0, alpha(Color32::WHITE, 28));
         let nyq = s.nyquist();
         let fstep = nice_step(nyq, 6.0, &[1_000.0, 2_000.0, 5_000.0, 10_000.0, 20_000.0]);

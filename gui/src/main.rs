@@ -907,7 +907,7 @@ fn right_stat(ui: &mut egui::Ui, label: &str, value: String, color: Color32) {
     ui.with_layout(Layout::top_down(Align::Max), |ui| {
         ui.spacing_mut().item_spacing.y = 2.0;
         ui.add(egui::Label::new(style::caption(label)).extend());
-        ui.add(egui::Label::new(style::mono_bold(value, 16.0).color(color)).extend());
+        ui.add(egui::Label::new(style::mono_bold(value, 17.5).color(color)).extend());
     });
 }
 
@@ -937,8 +937,8 @@ fn report_view(ui: &mut egui::Ui, slot: &Slot, r: &FileReport, quality: &mut Qua
                     |ui| {
                         ui.vertical(|ui| {
                             ui.spacing_mut().item_spacing.y = 2.0;
-                            ui.label(style::heading(file, 22.0));
-                            ui.label(mono(slot.path.display().to_string(), 11.0).color(TEXT_DIM));
+                            ui.label(style::heading(file, 24.0));
+                            ui.label(mono(slot.path.display().to_string(), 12.0).color(TEXT_DIM));
                         });
                     },
                     |ui| {
@@ -989,9 +989,9 @@ fn report_view(ui: &mut egui::Ui, slot: &Slot, r: &FileReport, quality: &mut Qua
                                     if r.verdict.status == Status::Genuine && i.lossless {
                                         title.push_str(" LOSSLESS");
                                     }
-                                    ui.label(style::heading(title, 22.0).color(color));
+                                    ui.label(style::heading(title, 25.0).color(color));
                                     if let Some(first) = r.verdict.reasons.first() {
-                                        ui.label(RichText::new(first).size(12.5).color(TEXT_DIM));
+                                        ui.label(RichText::new(first).size(14.0).color(TEXT_DIM));
                                     }
                                 });
                             },
@@ -1186,7 +1186,7 @@ fn report_view(ui: &mut egui::Ui, slot: &Slot, r: &FileReport, quality: &mut Qua
                     for (col, (k, v, tint)) in c.iter_mut().zip(&cells) {
                         col.spacing_mut().item_spacing.y = 3.0;
                         col.label(style::caption(*k));
-                        let mut t = mono_bold(v, 12.5);
+                        let mut t = mono_bold(v, 13.5);
                         if let Some(tc) = tint {
                             t = t.color(*tc);
                         }

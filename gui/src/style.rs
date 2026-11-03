@@ -142,7 +142,7 @@ pub fn mono_bold(text: impl Into<String>, size: f32) -> RichText {
 
 /// Small dim uppercase label that sits above a value.
 pub fn caption(text: impl Into<String>) -> RichText {
-    mono(text, 10.0).color(TEXT_DIM)
+    mono(text, 11.5).color(TEXT_DIM)
 }
 
 /// Rounded surface used for grouped content.
@@ -167,9 +167,9 @@ pub fn card_title(ui: &mut Ui, icon: &str, text: &str) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 6.0;
         if !icon.is_empty() {
-            ui.label(RichText::new(icon).size(15.0).color(ACCENT));
+            ui.label(RichText::new(icon).size(17.0).color(ACCENT));
         }
-        ui.label(heading(text, 17.0));
+        ui.label(heading(text, 19.0));
     });
 }
 
@@ -180,8 +180,8 @@ pub fn badge(ui: &mut Ui, text: &str, color: Color32) {
         .layout_no_wrap(text.to_string(), chip_font(), color)
         .size()
         .x
-        + 12.0;
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(w, 18.0), egui::Sense::hover());
+        + 14.0;
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(w, 20.0), egui::Sense::hover());
     chip(ui.painter(), rect.left_center(), text, color);
 }
 
@@ -213,11 +213,11 @@ pub fn stat_tile(ui: &mut Ui, s: &Stat, fill: Color32, size: f32) {
                 }
                 ui.label(v);
                 if !s.unit.is_empty() {
-                    ui.label(mono(s.unit, 11.0).color(TEXT_DIM));
+                    ui.label(mono(s.unit, 12.5).color(TEXT_DIM));
                 }
             });
             if !s.note.is_empty() {
-                ui.label(mono(&s.note, 10.0).color(s.note_color));
+                ui.label(mono(&s.note, 11.5).color(s.note_color));
             }
         });
 }
@@ -232,8 +232,8 @@ pub fn reason_chip(ui: &mut Ui, text: &str, color: Color32) {
             ui.set_min_width(ui.available_width());
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
-                ui.label(RichText::new("✔").size(12.0).color(color));
-                ui.label(RichText::new(text).size(12.5).color(TEXT_DIM));
+                ui.label(RichText::new("✔").size(13.5).color(color));
+                ui.label(RichText::new(text).size(14.0).color(TEXT_DIM));
             });
         });
 }
@@ -283,7 +283,7 @@ pub fn chip_right(
         .layout_no_wrap(text.to_string(), chip_font(), color)
         .size()
         .x
-        + 12.0;
+        + 14.0;
     chip(
         painter,
         egui::pos2(right_center.x - w, right_center.y),
@@ -293,13 +293,13 @@ pub fn chip_right(
 }
 
 fn chip_font() -> FontId {
-    FontId::new(10.5, mono_bold_family())
+    FontId::new(11.5, mono_bold_family())
 }
 
 /// Square-cornered status tag drawn with a painter; returns its width.
 pub fn chip(painter: &egui::Painter, left_center: egui::Pos2, text: &str, color: Color32) -> f32 {
     let galley = painter.layout_no_wrap(text.to_string(), chip_font(), color);
-    let (w, h) = (galley.size().x + 12.0, 18.0);
+    let (w, h) = (galley.size().x + 14.0, 20.0);
     let rect = egui::Rect::from_min_size(
         egui::pos2(left_center.x, left_center.y - h / 2.0),
         egui::vec2(w, h),
@@ -307,7 +307,7 @@ pub fn chip(painter: &egui::Painter, left_center: egui::Pos2, text: &str, color:
     painter.rect_filled(rect, CornerRadius::same(2), alpha(color, 36));
     painter.galley(
         egui::pos2(
-            rect.left() + 6.0,
+            rect.left() + 7.0,
             rect.center().y - galley.size().y / 2.0 + 1.0,
         ),
         galley,
