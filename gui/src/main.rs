@@ -1203,10 +1203,13 @@ fn report_view(ui: &mut egui::Ui, slot: &Slot, r: &FileReport, quality: &mut Qua
                 card().show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     ui.horizontal(|ui| {
-                        style::card_title(ui, "📈", "Average spectrum");
+                        style::card_title(ui, "📈", "Average spectrum plot");
                         style::badge(
                             ui,
-                            &format!("FFT {} · PEAK HOLD", truelossless_core::spectrum::FFT_SIZE),
+                            &format!(
+                                "FFT SIZE {} · BLACKMAN-HARRIS",
+                                truelossless_core::spectrum::FFT_SIZE
+                            ),
                             TEXT_DIM,
                         );
                     });
