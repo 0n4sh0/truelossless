@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use style::{alpha, card, chip_right, tinted_card, ACCENT, BG, GREEN, LOWEST, PANEL, TEXT_DIM};
 use truelossless_core::{
-    csv_line, CheckOptions, DecoderMode, FileReport, Md5Status, Status, CSV_HEADER,
+    csv_line, verdict, CheckOptions, DecoderMode, FileReport, Md5Status, Status, CSV_HEADER,
 };
 use worker::{start_scan, Msg, ScanHandle};
 
@@ -264,7 +264,7 @@ impl App {
         };
         ui.spacing_mut().item_spacing.x = 4.0;
         style::dot(&mut ui, col);
-        ui.label(style::mono(txt, 11.5).color(TEXT_DIM));
+        ui.label(style::mono(txt, 13.0).color(TEXT_DIM));
 
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
@@ -353,8 +353,8 @@ impl App {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 5.0;
                     style::dot(ui, color);
-                    ui.label(style::mono_bold(n.to_string(), 11.5));
-                    ui.label(style::mono(label, 11.5).color(TEXT_DIM));
+                    ui.label(style::mono_bold(n.to_string(), 13.0));
+                    ui.label(style::mono(label, 13.0).color(TEXT_DIM));
                 });
             };
             for (n, label, status) in [
@@ -371,7 +371,7 @@ impl App {
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let link = |ui: &mut egui::Ui, text: &str| {
-                    ui.add(egui::Button::new(style::mono(text, 11.5).color(TEXT_DIM)).frame(false))
+                    ui.add(egui::Button::new(style::mono(text, 13.0).color(TEXT_DIM)).frame(false))
                         .clicked()
                 };
                 if link(ui, "ℹ About") {
@@ -902,6 +902,65 @@ fn thousands(n: u64) -> String {
     out
 }
 
+/// How much of the band up to Nyquist carries content, in percent.
+fn nyquist_pct(r: &FileReport) -> Option<f32> {
+    let a = r.analysis.as_ref()?;
+    let sr = r.info.sample_rate? as f32;
+    Some((a.cutoff.bandwidth_hz / (sr / 2.0) * 100.0).min(100.0))
+}
+
+/// One sentence on why a genuine file passed.
+fn genuine_summary(r: &FileReport) -> Option<String> {
+    let mut parts = Vec::new();
+    if let Some(a) = &r.analysis {
+        let edge = if a.cutoff.cliff_db < verdict::SHARP_EDGE_DB {
+            "a natural roll-off"
+        } else {
+            "a sharp edge"
+        };
+        parts.push(format!(
+            "Content runs to {} kHz with {edge}",
+            khz(a.cutoff.bandwidth_hz)
+        ));
+        if let Some(e) = a.effective_bits {
+            parts.push(format!("all {e} bits carry signal"));
+        }
+    }
+    if r.md5.as_ref().is_some_and(|m| m.status == Md5Status::Match) {
+        parts.push("the audio matches its MD5".into());
+    }
+    (!parts.is_empty()).then(|| parts.join(", ") + ".")
+}
+
+/// Evidence chips for a genuine file: the checks it passed plus facts from
+/// the measurement that back them.
+fn genuine_chips(r: &FileReport) -> Vec<String> {
+    let (bits, passed): (Vec<_>, Vec<_>) = r
+        .verdict
+        .reasons
+        .iter()
+        .cloned()
+        .partition(|s| s.ends_with("-bit data"));
+    // Strongest evidence first: MD5, then the bandwidth checks.
+    let mut ranked: Vec<String> = passed
+        .iter()
+        .filter(|s| s.contains("MD5"))
+        .cloned()
+        .collect();
+    ranked.extend(passed.iter().filter(|s| !s.contains("MD5")).cloned());
+    if let Some(a) = &r.analysis {
+        let c = &a.cutoff;
+        if c.cliff_db < verdict::SHARP_EDGE_DB {
+            ranked.push(format!("No brick-wall lowpass ({:.0} dB edge)", c.cliff_db));
+        }
+    }
+    if !r.info.extension_mismatch {
+        ranked.push(format!("Content matches .{}", r.info.extension));
+    }
+    // Bit depth always shows, plus the two most telling of the rest.
+    bits.into_iter().chain(ranked.into_iter().take(2)).collect()
+}
+
 /// Caption over a value, right-aligned, for the verdict banner.
 fn right_stat(ui: &mut egui::Ui, label: &str, value: String, color: Color32) {
     ui.with_layout(Layout::top_down(Align::Max), |ui| {
@@ -942,15 +1001,24 @@ fn report_view(ui: &mut egui::Ui, slot: &Slot, r: &FileReport, quality: &mut Qua
                         });
                     },
                     |ui| {
-                        ui.spacing_mut().item_spacing.x = 6.0;
-                        if i.lossless {
-                            style::badge(ui, "LOSSLESS", GREEN);
-                        } else {
-                            style::badge(ui, "LOSSY", status_color(Status::Lossy));
-                        }
-                        style::badge(ui, &i.codec.to_uppercase(), ACCENT);
+                        // Centre the tags on the two-line title block.
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(ui.available_width(), 46.0),
+                            Layout::right_to_left(Align::Center),
+                            |ui| {
+                                ui.spacing_mut().item_spacing.x = 6.0;
+                                if i.lossless {
+                                    style::badge(ui, "LOSSLESS", GREEN);
+                                } else {
+                                    style::badge(ui, "LOSSY", status_color(Status::Lossy));
+                                }
+                                style::badge(ui, &i.codec.to_uppercase(), ACCENT);
+                            },
+                        );
                     },
                 );
+
+                let genuine = r.verdict.status == Status::Genuine;
 
                 // Verdict banner.
                 egui::Frame::new()
@@ -990,8 +1058,13 @@ fn report_view(ui: &mut egui::Ui, slot: &Slot, r: &FileReport, quality: &mut Qua
                                         title.push_str(" LOSSLESS");
                                     }
                                     ui.label(style::heading(title, 25.0).color(color));
-                                    if let Some(first) = r.verdict.reasons.first() {
-                                        ui.label(RichText::new(first).size(14.0).color(TEXT_DIM));
+                                    let line = if genuine {
+                                        genuine_summary(r)
+                                    } else {
+                                        r.verdict.reasons.first().cloned()
+                                    };
+                                    if let Some(line) = line {
+                                        ui.label(RichText::new(line).size(14.0).color(TEXT_DIM));
                                     }
                                 });
                             },
@@ -1015,11 +1088,18 @@ fn report_view(ui: &mut egui::Ui, slot: &Slot, r: &FileReport, quality: &mut Qua
                                     format!("{} kHz", khz(a.cutoff.bandwidth_hz)),
                                     strong,
                                 );
+                                if let Some(pct) = nyquist_pct(r) {
+                                    right_stat(ui, "NYQUIST USED", format!("{pct:.1}%"), strong);
+                                }
                             },
                         );
                     });
 
-                let mut chips: Vec<String> = r.verdict.reasons.iter().skip(1).cloned().collect();
+                let mut chips: Vec<String> = if genuine {
+                    genuine_chips(r)
+                } else {
+                    r.verdict.reasons.iter().skip(1).cloned().collect()
+                };
                 if let Some(e) = &r.analysis_error {
                     chips.push(format!("analysis failed: {e}"));
                 }
@@ -1270,11 +1350,12 @@ impl eframe::App for App {
                     .show(ui, |ui| self.file_list(ui));
             });
         egui::CentralPanel::default()
-            .frame(
-                egui::Frame::new()
-                    .fill(BG)
-                    .inner_margin(Margin::symmetric(20, 12)),
-            )
+            .frame(egui::Frame::new().fill(BG).inner_margin(Margin {
+                left: 4,
+                right: 20,
+                top: 12,
+                bottom: 12,
+            }))
             .show(ui, |ui| self.details(ui));
 
         self.about_window(&ctx);

@@ -463,8 +463,7 @@ pub fn icon_button(
 /// Filled dot, centred on the text line.
 pub fn dot(ui: &mut Ui, color: Color32) {
     let (r, _) = ui.allocate_exact_size(egui::vec2(8.0, 12.0), egui::Sense::hover());
-    ui.painter()
-        .circle_filled(r.center() + egui::vec2(0.0, 1.0), 3.0, color);
+    ui.painter().circle_filled(r.center(), 3.5, color);
 }
 
 /// Frameless icon button with a hover highlight and tooltip.
