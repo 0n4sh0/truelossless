@@ -25,7 +25,7 @@ use style::{alpha, card, chip_right, tinted_card, ACCENT, BG, GREEN, LOWEST, PAN
 use truelossless_core::{
     csv_line, verdict, CheckOptions, DecoderMode, FileReport, Md5Status, Status, CSV_HEADER,
 };
-use worker::{recheck, start_scan, Msg, ScanHandle};
+use worker::{clear_cache, recheck, start_scan, Msg, ScanHandle};
 
 fn main() -> eframe::Result {
     // Optional first argument: a folder or file to scan on start-up.
@@ -70,6 +70,8 @@ struct App {
     scan: Option<ScanHandle>,
     /// The scan was stopped, so nothing is measured ahead.
     stopped: bool,
+    /// Size of the caches on disk, measured when Settings opens.
+    cache_bytes: Option<u64>,
     rechecks: Vec<std::sync::mpsc::Receiver<(PathBuf, Result<FileReport, String>)>>,
     selected: Option<usize>,
     scroll_to_selected: bool,
@@ -477,6 +479,7 @@ impl App {
                     self.about_open = true;
                 }
                 if link(ui, "⚙ Settings") {
+                    self.cache_bytes = None;
                     self.settings_open = true;
                 }
                 ui.add_space(12.0);
@@ -525,6 +528,7 @@ impl App {
             PickFolder,
             Clear,
             Recheck,
+            ClearCache,
         }
         let mut open = self.settings_open;
         let mut act: Option<Act> = None;
@@ -615,6 +619,31 @@ impl App {
                         mode_changed = true;
                     }
                 }
+                ui.add_space(8.0);
+                ui.separator();
+                ui.add_space(4.0);
+                ui.label(RichText::new("Cache").strong());
+                ui.label(
+                    RichText::new(
+                        "Check results and quality measurements are kept so unchanged \
+                         files open at once. Clearing makes every file be checked again.",
+                    )
+                    .small()
+                    .color(TEXT_DIM),
+                );
+                let bytes = *self.cache_bytes.get_or_insert_with(cache_size);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(format!("{:.1} MB on disk", bytes as f64 / 1e6))
+                            .color(TEXT_DIM),
+                    );
+                    if ui
+                        .add_enabled(bytes > 0, egui::Button::new("Clear cache"))
+                        .clicked()
+                    {
+                        act = Some(Act::ClearCache);
+                    }
+                });
             });
         self.settings_open = open;
 
@@ -643,6 +672,16 @@ impl App {
                 changed = true;
             }
             Some(Act::Recheck) => changed = true,
+            Some(Act::ClearCache) => {
+                self.stop();
+                self.quality.clear();
+                clear_cache();
+                if let Some(d) = settings::quality_dir() {
+                    let _ = std::fs::remove_dir_all(d);
+                }
+                self.cache_bytes = None;
+                self.notice = Some(("Cache cleared".into(), Instant::now()));
+            }
             None => {}
         }
         if changed {
@@ -986,7 +1025,11 @@ impl App {
                     ui.label(e);
                 });
             }
-            Some(Ok(r)) => report_view(ui, slot, r, &mut self.quality),
+            Some(Ok(r)) => {
+                if report_view(ui, slot, r, &mut self.quality) {
+                    self.rescan_file(i, &ui.ctx().clone());
+                }
+            }
         }
     }
 }
@@ -1078,9 +1121,11 @@ fn right_stat(ui: &mut egui::Ui, label: &str, value: String, color: Color32) {
     });
 }
 
-fn report_view(ui: &mut egui::Ui, slot: &Slot, r: &FileReport, quality: &mut QualityStore) {
+/// Draw the report; returns true when the rescan button was clicked.
+fn report_view(ui: &mut egui::Ui, slot: &Slot, r: &FileReport, quality: &mut QualityStore) -> bool {
     use style::{mono, mono_bold, Stat};
     let color = status_color(r.verdict.status);
+    let mut rescan = false;
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
@@ -1115,6 +1160,8 @@ fn report_view(ui: &mut egui::Ui, slot: &Slot, r: &FileReport, quality: &mut Qua
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                 ui.spacing_mut().item_spacing.x = 6.0;
                                 // Right to left: the last tag added sits leftmost.
+                                rescan =
+                                    style::icon_click(ui, style::Icon::Sync, "Rescan this file");
                                 if i.lossless {
                                     style::badge(ui, "LOSSLESS", GREEN);
                                 } else {
@@ -1409,6 +1456,22 @@ fn report_view(ui: &mut egui::Ui, slot: &Slot, r: &FileReport, quality: &mut Qua
             });
             ui.add_space(8.0);
         });
+    rescan
+}
+
+/// Bytes used by the check cache and the quality cache.
+fn cache_size() -> u64 {
+    let file = settings::cache_file()
+        .and_then(|f| std::fs::metadata(f).ok())
+        .map_or(0, |m| m.len());
+    let dir = settings::quality_dir()
+        .and_then(|d| std::fs::read_dir(d).ok())
+        .map_or(0, |rd| {
+            rd.filter_map(|e| e.ok()?.metadata().ok())
+                .map(|m| m.len())
+                .sum()
+        });
+    file + dir
 }
 
 fn drop_overlay(ctx: &egui::Context) {

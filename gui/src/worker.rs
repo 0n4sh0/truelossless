@@ -46,6 +46,16 @@ impl Drop for ScanHandle {
     }
 }
 
+/// Forget every cached check result, in memory and on disk.
+pub fn clear_cache() {
+    if let Ok(mut c) = cache().lock() {
+        *c = ScanCache::default();
+    }
+    if let Some(f) = crate::settings::cache_file() {
+        let _ = std::fs::remove_file(f);
+    }
+}
+
 /// Check one file again, ignoring and replacing its cached result.
 pub fn recheck(
     path: PathBuf,
