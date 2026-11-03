@@ -10,6 +10,7 @@ use eframe::egui::{
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender};
+use truelossless_core::cache;
 use truelossless_core::quality::SPEC_DB_MIN;
 use truelossless_core::{
     analyze_quality_with, DecoderMode, FileReport, Quality, QualityOptions, Toolchain,
@@ -112,7 +113,21 @@ impl QualityStore {
             duration_hint: hint,
         };
         std::thread::spawn(move || {
-            let res = analyze_quality_with(&p, ffmpeg.as_ref(), opts).map_err(|e| e.to_string());
+            let dir = crate::settings::quality_dir();
+            let cached = dir
+                .as_deref()
+                .and_then(|d| cache::load_quality(d, &p, opts.mode));
+            let res = match cached {
+                Some(q) => Ok(q),
+                None => {
+                    let res =
+                        analyze_quality_with(&p, ffmpeg.as_ref(), opts).map_err(|e| e.to_string());
+                    if let (Some(d), Ok(q)) = (&dir, &res) {
+                        let _ = cache::save_quality(d, &p, opts.mode, q);
+                    }
+                    res
+                }
+            };
             let _ = tx.send((p, res));
             ctx.request_repaint();
         });

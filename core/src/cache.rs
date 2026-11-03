@@ -13,6 +13,7 @@ use crate::check::{CheckOptions, FileReport};
 use crate::cutoff::Cutoff;
 use crate::flac::{Md5Report, Md5Status};
 use crate::probe::{Container, FileInfo};
+use crate::quality::{ChannelStats, Decoder, DecoderMode, Quality, Spectrogram};
 use crate::special::CodecKind;
 use crate::spectrum::Spectrum;
 use crate::verdict::{Status, Verdict};
@@ -385,9 +386,197 @@ fn read_report(r: &mut R) -> Option<FileReport> {
     })
 }
 
+// ---------------------------------------------------------------------------
+// Quality measurements
+//
+// A spectrogram runs to megabytes, so each file gets its own cache file in
+// `dir`, named after a hash of its path. The header repeats the path and
+// stamp, so a hash collision or a changed file is a miss.
+
+const QMAGIC: &[u8; 4] = b"TLQ1";
+const MODES: [DecoderMode; 3] = [DecoderMode::Auto, DecoderMode::Native, DecoderMode::Ffmpeg];
+const DECODERS: [Decoder; 2] = [Decoder::Native, Decoder::Ffmpeg];
+
+fn quality_file(dir: &Path, path: &Path) -> PathBuf {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    path.hash(&mut h);
+    dir.join(format!("{:016x}.bin", h.finish()))
+}
+
+fn quality_header(w: &mut W, path: &Path, (size, mtime_ns): (u64, u64), mode: DecoderMode) {
+    w.0.extend_from_slice(QMAGIC);
+    w.str(env!("CARGO_PKG_VERSION"));
+    w.str(&path.to_string_lossy());
+    w.u64(size);
+    w.u64(mtime_ns);
+    w.u8(index_of(&MODES, &mode));
+}
+
+/// The cached measurement of `path` made with `mode`, if the file is unchanged.
+pub fn load_quality(dir: &Path, path: &Path, mode: DecoderMode) -> Option<Quality> {
+    let mut want = W::default();
+    quality_header(&mut want, path, stamp(path)?, mode);
+    let bytes = std::fs::read(quality_file(dir, path)).ok()?;
+    let rest = bytes.strip_prefix(want.0.as_slice())?;
+    read_quality(&mut R { b: rest, i: 0 })
+}
+
+/// Store the measurement of `path` made with `mode`.
+pub fn save_quality(
+    dir: &Path,
+    path: &Path,
+    mode: DecoderMode,
+    q: &Quality,
+) -> std::io::Result<()> {
+    let Some(st) = stamp(path) else {
+        return Ok(());
+    };
+    let mut w = W::default();
+    quality_header(&mut w, path, st, mode);
+    write_quality(&mut w, q);
+    std::fs::create_dir_all(dir)?;
+    let file = quality_file(dir, path);
+    let tmp = file.with_extension("tmp");
+    std::fs::write(&tmp, w.0)?;
+    std::fs::rename(&tmp, file)
+}
+
+fn write_quality(w: &mut W, q: &Quality) {
+    w.u8(index_of(&DECODERS, &q.decoder));
+    w.u32(q.sample_rate);
+    w.u64(q.channels as u64);
+    w.f64(q.duration_secs);
+    w.opt(&q.bitrate_bps, |w, v| w.f64(*v));
+    for v in [q.peak_db, q.true_peak_dbtp, q.rms_db, q.dynamic_range_db] {
+        w.f64(v);
+    }
+    w.opt(&q.lufs, |w, v| w.f64(*v));
+    w.u64(q.clipped);
+    w.u32(q.per_channel.len() as u32);
+    for c in &q.per_channel {
+        for v in [c.peak_db, c.rms_db, c.dynamic_range_db] {
+            w.f64(v);
+        }
+        w.u64(c.clipped);
+    }
+    let s = &q.spectrogram;
+    w.u32(s.sample_rate);
+    w.u64(s.cols as u64);
+    w.u64(s.rows as u64);
+    w.f64(s.duration_secs);
+    w.u32(s.layers.len() as u32);
+    for l in &s.layers {
+        w.u64(l.len() as u64);
+        w.0.extend_from_slice(l);
+    }
+}
+
+fn read_quality(r: &mut R) -> Option<Quality> {
+    let decoder = r.pick(&DECODERS)?;
+    let sample_rate = r.u32()?;
+    let channels = r.u64()? as usize;
+    let duration_secs = r.f64()?;
+    let bitrate_bps = r.opt(|r| r.f64())?;
+    let (peak_db, true_peak_dbtp, rms_db, dynamic_range_db) =
+        (r.f64()?, r.f64()?, r.f64()?, r.f64()?);
+    let lufs = r.opt(|r| r.f64())?;
+    let clipped = r.u64()?;
+    let per_channel = (0..r.u32()?)
+        .map(|_| {
+            Some(ChannelStats {
+                peak_db: r.f64()?,
+                rms_db: r.f64()?,
+                dynamic_range_db: r.f64()?,
+                clipped: r.u64()?,
+            })
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let s_rate = r.u32()?;
+    let cols = r.u64()? as usize;
+    let rows = r.u64()? as usize;
+    let s_dur = r.f64()?;
+    let layers = (0..r.u32()?)
+        .map(|_| {
+            let n = r.u64()? as usize;
+            Some(r.take(n)?.to_vec())
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some(Quality {
+        decoder,
+        sample_rate,
+        channels,
+        duration_secs,
+        bitrate_bps,
+        peak_db,
+        true_peak_dbtp,
+        rms_db,
+        dynamic_range_db,
+        lufs,
+        clipped,
+        per_channel,
+        spectrogram: Spectrogram {
+            sample_rate: s_rate,
+            cols,
+            rows,
+            duration_secs: s_dur,
+            layers,
+        },
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quality_round_trips() {
+        let dir = temp("quality");
+        let audio = dir.join("a.flac");
+        std::fs::write(&audio, b"fLaC").unwrap();
+        let q = Quality {
+            decoder: Decoder::Ffmpeg,
+            sample_rate: 48_000,
+            channels: 2,
+            duration_secs: 3.5,
+            bitrate_bps: Some(900_000.0),
+            peak_db: -0.1,
+            true_peak_dbtp: 0.2,
+            rms_db: -14.0,
+            dynamic_range_db: 13.9,
+            lufs: None,
+            clipped: 3,
+            per_channel: vec![ChannelStats {
+                peak_db: -0.1,
+                rms_db: -14.0,
+                dynamic_range_db: 13.9,
+                clipped: 3,
+            }],
+            spectrogram: Spectrogram {
+                sample_rate: 48_000,
+                cols: 2,
+                rows: 2,
+                duration_secs: 3.5,
+                layers: vec![vec![1, 2, 3, 4]],
+            },
+        };
+        let qdir = dir.join("q");
+        save_quality(&qdir, &audio, DecoderMode::Auto, &q).unwrap();
+        let back = load_quality(&qdir, &audio, DecoderMode::Auto).unwrap();
+        assert_eq!(back.spectrogram.layers, q.spectrogram.layers);
+        assert_eq!(back.clipped, 3);
+        assert_eq!(back.decoder, Decoder::Ffmpeg);
+        assert!(
+            load_quality(&qdir, &audio, DecoderMode::Native).is_none(),
+            "other mode"
+        );
+        std::fs::write(&audio, b"fLaC-changed").unwrap();
+        assert!(
+            load_quality(&qdir, &audio, DecoderMode::Auto).is_none(),
+            "file changed"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     fn report(path: &Path) -> FileReport {
         FileReport {
