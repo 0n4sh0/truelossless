@@ -21,7 +21,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
-const MAGIC: &[u8; 4] = b"TLC1";
+// Bump when what a check reports changes, so stale entries are dropped.
+const MAGIC: &[u8; 4] = b"TLC2";
 
 /// A check result: the report, or why the file could not be read.
 pub type CheckResult = Result<FileReport, String>;

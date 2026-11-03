@@ -235,10 +235,27 @@ pub fn probe_file(path: &Path) -> Result<FileInfo, ProbeError> {
     let lossless =
         p.codec == CODEC_TYPE_FLAC || p.codec == CODEC_TYPE_ALAC || codec.starts_with("pcm");
 
+    // A file still being written (or truncated) can report nonsense.
+    if p.sample_rate.is_some_and(|sr| sr < MIN_SAMPLE_RATE) {
+        return Err(ProbeError::Decode(
+            "invalid sample rate; the file may be incomplete or damaged".into(),
+        ));
+    }
     let duration_secs = match (p.n_frames, p.sample_rate) {
         (Some(n), Some(sr)) if sr > 0 => Some(n as f64 / sr as f64),
         _ => None,
     };
+    if duration_secs.is_some_and(|d| d > MAX_DURATION_SECS) {
+        return Err(ProbeError::Decode(
+            "implausible duration; the file may be incomplete or damaged".into(),
+        ));
+    }
+
+    // Symphonia leaves bit depth and channels unset for ALAC in MP4; both
+    // are in the codec's config block.
+    let alac = (p.codec == CODEC_TYPE_ALAC)
+        .then(|| p.extra_data.as_deref().and_then(alac_config))
+        .flatten();
 
     Ok(FileInfo {
         path: path.to_path_buf(),
@@ -248,13 +265,38 @@ pub fn probe_file(path: &Path) -> Result<FileInfo, ProbeError> {
         codec,
         lossless,
         sample_rate: p.sample_rate,
-        bits_per_sample: p.bits_per_sample.or(p.bits_per_coded_sample),
-        channels: p.channels.map(|c| c.count()),
+        bits_per_sample: p
+            .bits_per_sample
+            .or(p.bits_per_coded_sample)
+            .or(alac.map(|a| a.0)),
+        channels: p.channels.map(|c| c.count()).or(alac.map(|a| a.1)),
         duration_secs,
         extension_mismatch,
         header_only: None,
         note: None,
     })
+}
+
+/// Lowest sample rate a real audio file reports.
+const MIN_SAMPLE_RATE: u32 = 1_000;
+/// Longest duration taken at face value (100 hours).
+const MAX_DURATION_SECS: f64 = 100.0 * 3600.0;
+
+/// Bit depth and channel count from an ALAC config block
+/// (ALACSpecificConfig), with or without its 12-byte `alac` atom header.
+fn alac_config(extra: &[u8]) -> Option<(u32, usize)> {
+    let cfg = match extra.get(4..8) {
+        Some(b"alac") => extra.get(12..)?,
+        _ => extra,
+    };
+    if cfg.len() < 24 {
+        return None;
+    }
+    // frameLength (4), compatibleVersion (1), bitDepth (1), pb, mb, kb,
+    // numChannels (1), ...
+    let bits = cfg[5] as u32;
+    let channels = cfg[9] as usize;
+    (bits > 0 && channels > 0).then_some((bits, channels))
 }
 
 /// Probe many files in parallel, preserving input order.
@@ -298,5 +340,19 @@ mod tests {
         assert_eq!(Container::from_extension("FLAC"), Container::Flac);
         assert_eq!(Container::from_extension("m4a"), Container::Mp4);
         assert_eq!(Container::from_extension("txt"), Container::Unknown);
+    }
+
+    #[test]
+    fn reads_alac_config_with_and_without_atom_header() {
+        // frameLength 4096, version 0, 24-bit, pb/mb/kb, 2 channels, rest zero.
+        let mut cfg = vec![0, 0, 16, 0, 0, 24, 40, 10, 14, 2];
+        cfg.resize(24, 0);
+        assert_eq!(alac_config(&cfg), Some((24, 2)));
+        let mut atom = vec![0, 0, 0, 36];
+        atom.extend_from_slice(b"alac");
+        atom.extend_from_slice(&[0, 0, 0, 0]);
+        atom.extend_from_slice(&cfg);
+        assert_eq!(alac_config(&atom), Some((24, 2)));
+        assert_eq!(alac_config(&cfg[..10]), None, "too short");
     }
 }

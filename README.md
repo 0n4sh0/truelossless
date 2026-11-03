@@ -15,6 +15,8 @@ files, mislabelled containers and damaged FLAC streams.
 It ships as a **command-line tool** and a **desktop app**, both built on the
 same Rust library. No ffmpeg or other runtime dependency is needed.
 
+![The desktop app flagging an ALAC file whose content stops at 16.2 kHz](assets/screenshots/app.png)
+
 ## Why
 
 A file named `song.flac` can still be an MP3 that someone re-encoded. Lossy
@@ -145,7 +147,8 @@ size_bytes, content_ends_khz, edge_db, md5`. Fields that start with `=`, `+`,
 ## Project layout
 
 ```
-assets/ app icon (icon.png, icon.ico), GitHub social preview, make_icon.py
+assets/ app icon (icon.png, icon.ico), GitHub social preview, make_icon.py,
+        screenshots/ for this README
 core/  analysis library: probe, decode, spectrum, cutoff, verdict, csv
 cli/   truelossless command-line tool
 gui/   truelossless-gui desktop app (egui)
