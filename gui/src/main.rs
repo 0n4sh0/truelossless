@@ -371,8 +371,11 @@ impl App {
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let link = |ui: &mut egui::Ui, text: &str| {
-                    ui.add(egui::Button::new(style::mono(text, 13.0).color(TEXT_DIM)).frame(false))
-                        .clicked()
+                    ui.add(
+                        egui::Button::new(RichText::new(text).size(14.0).color(style::TEXT))
+                            .frame(false),
+                    )
+                    .clicked()
                 };
                 if link(ui, "ℹ About") {
                     self.about_open = true;
@@ -1233,21 +1236,38 @@ fn report_view(ui: &mut egui::Ui, slot: &Slot, r: &FileReport, quality: &mut Qua
                         format!(
                             "{} ({})",
                             i.codec,
-                            if i.lossless { "lossless" } else { "lossy" }
+                            if i.codec.starts_with("pcm") {
+                                "uncompressed"
+                            } else if i.lossless {
+                                "lossless"
+                            } else {
+                                "lossy"
+                            }
                         ),
                         None,
                     ),
                     (
                         "CHANNELS",
-                        i.channels.map_or("-".into(), |v| v.to_string()),
+                        i.channels.map_or("-".into(), |v| match v {
+                            1 => "1 (Mono)".into(),
+                            2 => "2 (Stereo)".into(),
+                            6 => "6 (5.1)".into(),
+                            8 => "8 (7.1)".into(),
+                            n => n.to_string(),
+                        }),
                         None,
                     ),
                 ];
                 if let Some(a) = &r.analysis {
+                    let kind = if a.cutoff.cliff_db < verdict::SHARP_EDGE_DB {
+                        "Natural"
+                    } else {
+                        "Sharp"
+                    };
                     cells.push((
                         "STEEPEST EDGE",
                         format!(
-                            "{:.0} dB @ {} kHz",
+                            "{:.0} dB @ {} kHz ({kind})",
                             a.cutoff.cliff_db,
                             khz(a.cutoff.cliff_hz)
                         ),

@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use truelossless_core::cache;
-use truelossless_core::quality::SPEC_DB_MIN;
+use truelossless_core::quality::{SPEC_DB_MIN, SPEC_WIN};
 use truelossless_core::{
     analyze_quality_with, DecoderMode, FileReport, Quality, QualityOptions, Toolchain,
 };
@@ -401,6 +401,18 @@ fn spectrogram_card(ui: &mut egui::Ui, v: &mut QView) {
                     })
                     .collect();
                 segmented(ui, &names, &mut v.layer);
+                ui.add_space(12.0);
+                let sr = v.q.spectrogram.sample_rate.max(1) as f32;
+                ui.label(
+                    mono(
+                        format!(
+                            "Resolution: {SPEC_WIN} pt / {:.0} ms",
+                            SPEC_WIN as f32 / sr * 1000.0
+                        ),
+                        12.0,
+                    )
+                    .color(ACCENT),
+                );
             });
         });
         ui.add_space(4.0);
