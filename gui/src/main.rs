@@ -707,13 +707,13 @@ impl App {
         } else {
             style::CARD
         };
-        painter.rect_filled(bg, CornerRadius::same(6), fill);
+        painter.rect_filled(bg, CornerRadius::same(3), fill);
         if selected {
             painter.rect_filled(
                 egui::Rect::from_min_size(bg.min, egui::vec2(3.0, bg.height())),
                 CornerRadius {
-                    nw: 6,
-                    sw: 6,
+                    nw: 3,
+                    sw: 3,
                     ne: 0,
                     se: 0,
                 },
@@ -721,8 +721,6 @@ impl App {
             );
         }
 
-        let problem =
-            matches!(o, Outcome::Error) || matches!(o, Outcome::Done(s) if s >= Status::Suspect);
         let left = bg.left() + 12.0;
         let right = bg.right() - 10.0;
         let lines = [bg.top() + 16.0, bg.top() + 35.0, bg.top() + 53.0];
@@ -730,14 +728,13 @@ impl App {
         let mono = FontId::monospace(11.0);
 
         // Line 1: icon, file name and verdict tag.
-        let (icon, icon_color) = if problem {
-            (Icon::Warning, outcome_color(o))
-        } else if selected {
-            (Icon::File, ACCENT)
-        } else {
-            (Icon::File, TEXT_DIM)
-        };
-        paint_icon(painter, egui::pos2(left + 5.0, lines[0]), icon, icon_color);
+        let icon_color = if selected { ACCENT } else { TEXT_DIM };
+        paint_icon(
+            painter,
+            egui::pos2(left + 5.0, lines[0]),
+            Icon::File,
+            icon_color,
+        );
         let chip_w = chip_right(
             painter,
             egui::pos2(right, lines[0]),
@@ -765,29 +762,12 @@ impl App {
 
         // Line 2: format, or a short reason for a problem, and the duration.
         let (detail, detail_color, duration) = match &slot.result {
-            Some(Ok(r)) => {
-                let detail = if problem {
-                    let nyquist = r.info.sample_rate.map_or(0.0, |s| s as f32 / 2.0);
-                    match &r.analysis {
-                        Some(a) if a.cutoff.bandwidth_hz < nyquist * 0.98 => {
-                            format!("Cutoff @ {} kHz", khz(a.cutoff.bandwidth_hz))
-                        }
-                        _ => r.verdict.reasons.first().cloned().unwrap_or_default(),
-                    }
-                } else {
-                    row_summary(&r.info)
-                };
-                (
-                    detail,
-                    if problem { outcome_color(o) } else { TEXT_DIM },
-                    r.info.duration_secs.map(fmt_duration).unwrap_or_default(),
-                )
-            }
-            Some(Err(_)) => (
-                "could not be read".to_string(),
-                outcome_color(o),
-                String::new(),
+            Some(Ok(r)) => (
+                row_summary(&r.info),
+                TEXT_DIM,
+                r.info.duration_secs.map(fmt_duration).unwrap_or_default(),
             ),
+            Some(Err(_)) => ("could not be read".to_string(), TEXT_DIM, String::new()),
             None => ("checking…".to_string(), TEXT_DIM, String::new()),
         };
         let dur_w = painter

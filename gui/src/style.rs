@@ -147,7 +147,7 @@ pub fn caption(text: impl Into<String>) -> RichText {
 pub fn card() -> Frame {
     Frame::new()
         .fill(CARD)
-        .corner_radius(CornerRadius::same(8))
+        .corner_radius(CornerRadius::same(4))
         .inner_margin(Margin::same(12))
 }
 
@@ -301,9 +301,12 @@ pub fn chip(painter: &egui::Painter, left_center: egui::Pos2, text: &str, color:
         egui::pos2(left_center.x, left_center.y - h / 2.0),
         egui::vec2(w, h),
     );
-    painter.rect_filled(rect, CornerRadius::same(3), alpha(color, 36));
+    painter.rect_filled(rect, CornerRadius::same(2), alpha(color, 36));
     painter.galley(
-        egui::pos2(rect.left() + 6.0, rect.center().y - galley.size().y / 2.0),
+        egui::pos2(
+            rect.left() + 6.0,
+            rect.center().y - galley.size().y / 2.0 + 1.0,
+        ),
         galley,
         color,
     );
@@ -323,7 +326,6 @@ pub enum Icon {
     Close,
     Search,
     Sync,
-    Warning,
 }
 
 /// Draw `icon` in a 14 px box centred on `c`.
@@ -409,14 +411,6 @@ pub fn paint_icon(p: &egui::Painter, c: egui::Pos2, icon: Icon, color: Color32) 
                 s,
             );
         }
-        Icon::Warning => {
-            p.line(
-                vec![at(0.0, -6.5), at(7.0, 6.0), at(-7.0, 6.0), at(0.0, -6.5)],
-                s,
-            );
-            p.line_segment([at(0.0, -2.0), at(0.0, 2.0)], s);
-            p.circle_filled(at(0.0, 4.0), 0.9, color);
-        }
         Icon::Close => {
             p.line_segment([at(-5.0, -5.0), at(5.0, 5.0)], s);
             p.line_segment([at(-5.0, 5.0), at(5.0, -5.0)], s);
@@ -466,7 +460,8 @@ pub fn icon_button(
 /// Filled dot, centred on the text line.
 pub fn dot(ui: &mut Ui, color: Color32) {
     let (r, _) = ui.allocate_exact_size(egui::vec2(8.0, 12.0), egui::Sense::hover());
-    ui.painter().circle_filled(r.center(), 3.0, color);
+    ui.painter()
+        .circle_filled(r.center() + egui::vec2(0.0, 1.0), 3.0, color);
 }
 
 /// Frameless icon button with a hover highlight and tooltip.
