@@ -52,6 +52,10 @@ pub struct QualityStore {
     fg_cancel: Arc<AtomicBool>,
     /// Files the user chose not to measure; they wait for "Measure now".
     skipped: HashSet<PathBuf>,
+    /// After "stop all", files are only measured on request.
+    paused: bool,
+    /// Files the user asked to measure while paused.
+    allowed: HashSet<PathBuf>,
     queue: VecDeque<Pending>,
     bg_current: Option<PathBuf>,
     /// Set to stop the background job early.
@@ -76,6 +80,8 @@ impl Default for QualityStore {
             running: None,
             fg_cancel: Arc::new(AtomicBool::new(false)),
             skipped: HashSet::new(),
+            paused: false,
+            allowed: HashSet::new(),
             queue: VecDeque::new(),
             bg_current: None,
             bg_cancel: Arc::new(AtomicBool::new(false)),
@@ -93,6 +99,7 @@ impl Default for QualityStore {
 impl QualityStore {
     /// Measure these files in the background, one at a time.
     pub fn queue_background(&mut self, files: Vec<Pending>) {
+        self.paused = false;
         let unsupported = !self.can_decode_unsupported();
         self.queue = files
             .into_iter()
@@ -133,9 +140,20 @@ impl QualityStore {
         self.running.as_deref() == Some(path) || self.bg_current.as_deref() == Some(path)
     }
 
+    /// Stop all measuring, on screen and ahead. Until the next scan, files
+    /// load from the cache but are only measured when asked.
+    pub fn stop_all(&mut self) {
+        self.stop_background();
+        self.paused = true;
+        if let Some(p) = self.running.clone() {
+            self.skip(&p);
+        }
+    }
+
     /// Measure a skipped file after all.
     pub fn unskip(&mut self, path: &Path) {
         self.skipped.remove(path);
+        self.allowed.insert(path.to_path_buf());
     }
 
     /// Files measured (or skipped) so far, and the round's total.
@@ -287,6 +305,9 @@ impl QualityStore {
     }
 
     pub fn clear(&mut self) {
+        self.skipped.clear();
+        self.allowed.clear();
+        self.paused = false;
         self.map.clear();
         self.order.clear();
     }
@@ -307,6 +328,18 @@ pub fn show_stats(ui: &mut egui::Ui, store: &mut QualityStore, path: &Path, r: &
             ui.label(RichText::new(why).color(TEXT_DIM));
         });
         return;
+    }
+    // While paused, a file with nothing cached waits for "Measure now".
+    if store.paused
+        && !store.map.contains_key(path)
+        && !store.allowed.contains(path)
+        && !store.skipped.contains(path)
+    {
+        let cached = crate::settings::quality_dir()
+            .is_some_and(|d| cache::has_quality(&d, path, store.mode));
+        if !cached {
+            store.skipped.insert(path.to_path_buf());
+        }
     }
     if store.skipped.contains(path) {
         card().show(ui, |ui| {

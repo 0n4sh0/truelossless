@@ -155,7 +155,7 @@ impl App {
             h.cancel();
         }
         self.stopped = true;
-        self.quality.stop_background();
+        self.quality.stop_all();
     }
 
     /// Queue every checked, lossless file for measuring ahead.
