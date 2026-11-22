@@ -13,8 +13,8 @@ path = "src/main.rs"
 
 [dependencies]
 truelossless-core = { path = "../core" }
-eframe = { version = "0.35", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
-rfd = "0.17"
+eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+rfd = "0.18"
 rayon = "1"
 
 [target.'cfg(windows)'.build-dependencies]
